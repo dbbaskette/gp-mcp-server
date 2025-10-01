@@ -1,0 +1,132 @@
+# Greenplum MCP Server Configuration
+# Provides safe query tools for Greenplum/PostgreSQL via Model Context Protocol
+
+spring:
+  application:
+    name: gp-mcp-server
+  
+  # Database Configuration
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/gpdb}
+    username: ${DB_USER:gpuser}
+    password: ${DB_PASSWORD:secret}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      connection-test-query: "SELECT 1"
+      validation-timeout: 5000
+
+  # WebFlux Configuration for HTTP Streaming
+  webflux:
+    base-path: /mcp
+
+# Greenplum MCP Server Configuration
+gp:
+  mcp:
+    # Database session settings
+    search-path: ${DB_SEARCH_PATH:public}
+    statement-timeout-ms: ${DB_STATEMENT_TIMEOUT_MS:5000}
+    idle-tx-timeout-ms: ${DB_IDLE_TX_TIMEOUT_MS:2000}
+    
+    # Policy configuration
+    policy:
+      path: ${POLICY_PATH:classpath:policy.yml}
+      max-rows: 10000
+      max-bytes-mb: 100
+      statement-timeout-ms: 5000
+      
+      # Allowed schemas (comma-separated)
+      allowed-schemas: public,information_schema,pg_catalog
+      
+      # Allowed tables (supports wildcards)
+      allowed-tables: public.*
+      
+      # Allowed columns (supports wildcards)
+      allowed-columns: "*"
+      
+      # Redaction rules
+      redaction-rules:
+        "public.users.email": 
+          type: MASK
+          replacement: "***@***.***"
+        "public.users.phone":
+          type: MASK
+          replacement: "***-***-****"
+
+# Management and Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: gp-mcp-server
+      environment: ${ENVIRONMENT:development}
+
+# OpenTelemetry Configuration
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+
+# Logging Configuration
+logging:
+  level:
+    com.baskettecase.gpmcp: DEBUG
+    org.springframework.ai.mcp: DEBUG
+    org.springframework.jdbc: INFO
+    com.zaxxer.hikari: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{traceId:-},%X{spanId:-}] %logger{36} - %msg%n"
+  file:
+    name: logs/gp-mcp-server.log
+
+# Server Configuration
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 1024
+
+# MCP Server Configuration
+spring:
+  ai:
+    mcp:
+      server:
+        # Enable Streamable-HTTP transport
+        transport: HTTP_STREAMING
+        # Server configuration
+        host: ${MCP_SERVER_HOST:localhost}
+        port: ${MCP_SERVER_PORT:8080}
+        # Tool configuration
+        tools:
+          enabled: true
+          # Tool discovery and registration
+          auto-register: true
+        # Security configuration
+        security:
+          enabled: true
+          # API key authentication (optional)
+          api-key: ${MCP_API_KEY:}
+        # Performance settings
+        performance:
+          max-concurrent-requests: 100
+          request-timeout: 30000
+          response-timeout: 60000

@@ -1,0 +1,145 @@
+# Greenplum MCP Server Security Policy Configuration
+# Defines access control rules, resource limits, and data redaction policies
+
+# Schema Access Control
+allowed-schemas:
+  - public
+  - information_schema
+  - pg_catalog
+
+# Table Access Control (supports wildcards)
+allowed-tables:
+  - public.*
+  # Example: specific tables only
+  # - public.users
+  # - public.orders
+  # - public.products
+
+# Column Access Control (supports wildcards)
+allowed-columns:
+  - "*"
+  # Example: specific columns only
+  # - public.users.id
+  # - public.users.name
+  # - public.users.email
+
+# Resource Limits
+limits:
+  max-rows: 10000
+  max-bytes-mb: 100
+  statement-timeout-ms: 5000
+  idle-tx-timeout-ms: 2000
+
+# Data Redaction Rules
+redaction-rules:
+  # Email addresses
+  "public.users.email":
+    type: MASK
+    replacement: "***@***.***"
+  
+  # Phone numbers
+  "public.users.phone":
+    type: MASK
+    replacement: "***-***-****"
+  
+  # Social Security Numbers
+  "public.users.ssn":
+    type: MASK
+    replacement: "***-**-****"
+  
+  # Credit Card Numbers
+  "public.payments.card_number":
+    type: MASK
+    replacement: "****-****-****-****"
+  
+  # Sensitive IDs
+  "public.users.internal_id":
+    type: HASH
+    replacement: "HASHED"
+
+# Query Restrictions
+query-restrictions:
+  # Blocked functions/statements
+  blocked-functions:
+    - pg_read_file
+    - pg_ls_dir
+    - lo_import
+    - lo_export
+    - copy
+    - create
+    - drop
+    - alter
+    - insert
+    - update
+    - delete
+    - grant
+    - revoke
+  
+  # Allowed SQL patterns (regex)
+  allowed-patterns:
+    - "^SELECT\\s+.*$"
+  
+  # Blocked SQL patterns (regex)
+  blocked-patterns:
+    - ".*\\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|GRANT|REVOKE)\\b.*"
+    - ".*\\b(EXEC|EXECUTE)\\b.*"
+    - ".*;.*"  # Multi-statement queries
+
+# Performance Settings
+performance:
+  # Connection pool settings
+  connection-pool:
+    max-size: 10
+    min-idle: 2
+    connection-timeout: 30000
+    idle-timeout: 300000
+    max-lifetime: 1800000
+  
+  # Query execution settings
+  query-execution:
+    fetch-size: 1000
+    max-fetch-size: 5000
+    streaming-enabled: true
+    cursor-enabled: true
+
+# Monitoring and Auditing
+monitoring:
+  # Metrics collection
+  metrics:
+    enabled: true
+    include-query-metrics: true
+    include-performance-metrics: true
+  
+  # Audit logging
+  audit:
+    enabled: true
+    log-level: INFO
+    include-query-text: false  # Security: don't log actual queries
+    include-parameters: false  # Security: don't log parameters
+    include-results: false     # Security: don't log result data
+  
+  # Tracing
+  tracing:
+    enabled: true
+    sample-rate: 1.0
+    include-db-spans: true
+
+# Environment-specific overrides
+environments:
+  development:
+    limits:
+      max-rows: 1000
+      max-bytes-mb: 10
+    audit:
+      include-query-text: true  # Allow query logging in dev
+  
+  production:
+    limits:
+      max-rows: 10000
+      max-bytes-mb: 100
+    audit:
+      include-query-text: false  # Never log queries in prod
+    performance:
+      connection-pool:
+        max-size: 20
+        min-idle: 5
