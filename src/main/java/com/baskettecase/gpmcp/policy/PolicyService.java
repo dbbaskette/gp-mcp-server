@@ -44,6 +44,13 @@ public class PolicyService {
     }
 
     /**
+     * Get all allowed schemas
+     */
+    public Set<String> getAllowedSchemas() {
+        return policy.getAllowedSchemas();
+    }
+
+    /**
      * Validate if a schema is allowed
      */
     public boolean isSchemaAllowed(String schemaName) {

@@ -4,11 +4,11 @@
 spring:
   application:
     name: gp-mcp-server
-  
+
   # Database Configuration
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/gpdb}
-    username: ${DB_USER:gpuser}
+    url: ${DB_URL:jdbc:postgresql://localhost:15432/postgres}
+    username: ${DB_USER:gpadmin}
     password: ${DB_PASSWORD:secret}
     hikari:
       maximum-pool-size: 10
@@ -19,9 +19,23 @@ spring:
       connection-test-query: "SELECT 1"
       validation-timeout: 5000
 
-  # WebFlux Configuration for HTTP Streaming
-  webflux:
-    base-path: /mcp
+  # MCP Server Configuration
+  ai:
+    mcp:
+      server:
+        # Protocol selection: STREAMABLE or SSE
+        protocol: STREAMABLE
+        # Annotation scanner for @McpTool discovery
+        annotation-scanner:
+          enabled: true
+        # Streamable-HTTP configuration
+        streamable-http:
+          # Custom MCP endpoint path (default: /mcp)
+          mcp-endpoint: /mcp
+          # Connection keep-alive interval
+          keep-alive-interval: 15s
+          # Disallow delete operations
+          disallow-delete: true
 
 # Greenplum MCP Server Configuration
 gp:
@@ -72,9 +86,7 @@ management:
     tags:
       application: gp-mcp-server
       environment: ${ENVIRONMENT:development}
-
-# OpenTelemetry Configuration
-management:
+  # OpenTelemetry Configuration
   tracing:
     sampling:
       probability: 1.0
@@ -97,7 +109,7 @@ logging:
 
 # Server Configuration
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:8082}
   servlet:
     context-path: /
   compression:
@@ -105,28 +117,3 @@ server:
     mime-types: application/json,application/xml,text/html,text/xml,text/plain
     min-response-size: 1024
 
-# MCP Server Configuration
-spring:
-  ai:
-    mcp:
-      server:
-        # Enable Streamable-HTTP transport
-        transport: HTTP_STREAMING
-        # Server configuration
-        host: ${MCP_SERVER_HOST:localhost}
-        port: ${MCP_SERVER_PORT:8080}
-        # Tool configuration
-        tools:
-          enabled: true
-          # Tool discovery and registration
-          auto-register: true
-        # Security configuration
-        security:
-          enabled: true
-          # API key authentication (optional)
-          api-key: ${MCP_API_KEY:}
-        # Performance settings
-        performance:
-          max-concurrent-requests: 100
-          request-timeout: 30000
-          response-timeout: 60000

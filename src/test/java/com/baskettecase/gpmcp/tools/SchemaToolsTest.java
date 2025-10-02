@@ -44,12 +44,13 @@ class SchemaToolsTest {
         );
 
         // Mock database response
-        List<Map<String, Object>> mockRows = Arrays.asList(
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mockRows = (List<Map<String, Object>>) (List<?>) Arrays.asList(
             Map.of("schema_name", "public", "table_count", 5L),
             Map.of("schema_name", "information_schema", "table_count", 10L)
         );
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
-            .thenReturn(mockRows);
+            .thenReturn((List) mockRows);
 
         // Execute test
         SchemaTools.SchemaListResult result = schemaTools.listSchemas(null, null, null, null);
@@ -74,11 +75,12 @@ class SchemaToolsTest {
         );
 
         // Mock database response
-        List<Map<String, Object>> mockRows = Arrays.asList(
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mockRows = (List<Map<String, Object>>) (List<?>) Arrays.asList(
             Map.of("schema_name", "public", "table_count", 3L)
         );
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
-            .thenReturn(mockRows);
+            .thenReturn((List) mockRows);
 
         // Execute test with custom parameters
         SchemaTools.SchemaListResult result = schemaTools.listSchemas(10, 5, true, false);
@@ -98,11 +100,12 @@ class SchemaToolsTest {
         );
 
         // Mock database response
-        List<Map<String, Object>> mockRows = Arrays.asList(
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mockRows = (List<Map<String, Object>>) (List<?>) Arrays.asList(
             Map.of("schema_name", "public", "table_count", 1L)
         );
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
-            .thenReturn(mockRows);
+            .thenReturn((List) mockRows);
 
         // Execute test with limit exceeding maximum
         SchemaTools.SchemaListResult result = schemaTools.listSchemas(200, null, null, null);
@@ -119,11 +122,12 @@ class SchemaToolsTest {
         );
 
         // Mock database response
-        List<Map<String, Object>> mockRows = Arrays.asList(
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> mockRows = (List<Map<String, Object>>) (List<?>) Arrays.asList(
             Map.of("schema_name", "public", "table_count", 1L)
         );
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
-            .thenReturn(mockRows);
+            .thenReturn((List) mockRows);
 
         // Execute test with negative offset
         SchemaTools.SchemaListResult result = schemaTools.listSchemas(null, -5, null, null);

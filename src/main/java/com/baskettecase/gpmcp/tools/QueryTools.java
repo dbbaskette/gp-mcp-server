@@ -8,16 +8,12 @@ import io.micrometer.core.instrument.Timer;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.tool.Tool;
-import org.springframework.ai.tool.ToolParameter;
+import org.springaicommunity.mcp.annotation.McpTool;
+import org.springaicommunity.mcp.annotation.McpToolParam;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -28,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Provides safe query execution tools with policy enforcement, streaming support,
  * and cursor-based pagination for large result sets.
  * 
- * @see <a href="https://docs.spring.io/spring-ai/reference/1.1-SNAPSHOT/api/mcp/mcp-annotations-server.html">Spring AI MCP Annotations</a>
+ * @see <a href="https://docs.spring.io/spring-ai/reference/1.1-SNAPSHOT/api/mcp/mcp-server-boot-starter-docs.html">Spring AI MCP Server</a>
  */
 @Slf4j
 @Component
@@ -60,18 +56,16 @@ public class QueryTools {
     /**
      * Preview and validate a query without executing it
      */
-    @Tool(
+    @McpTool(
         name = "gp.previewQuery",
         description = "Preview and validate a SELECT query without executing it. Returns query plan and validation results."
     )
     public QueryPreviewResult previewQuery(
-        @ToolParameter(
-            name = "sqlTemplate",
+        @McpToolParam(
             description = "SQL SELECT template with named parameters (e.g., 'SELECT * FROM users WHERE id = :id')",
             required = true
         ) String sqlTemplate,
-        @ToolParameter(
-            name = "params",
+        @McpToolParam(
             description = "Named parameters for the query",
             required = false
         ) Map<String, Object> params
@@ -124,28 +118,24 @@ public class QueryTools {
     /**
      * Execute a parameterized SELECT query with streaming support
      */
-    @Tool(
+    @McpTool(
         name = "gp.runQuery",
         description = "Execute a parameterized SELECT query with streaming support and policy enforcement."
     )
     public QueryResult runQuery(
-        @ToolParameter(
-            name = "sqlTemplate",
+        @McpToolParam(
             description = "SQL SELECT template with named parameters",
             required = true
         ) String sqlTemplate,
-        @ToolParameter(
-            name = "params",
+        @McpToolParam(
             description = "Named parameters for the query",
             required = false
         ) Map<String, Object> params,
-        @ToolParameter(
-            name = "maxRows",
+        @McpToolParam(
             description = "Maximum number of rows to return (default: 1000, max: 10000)",
             required = false
         ) Integer maxRows,
-        @ToolParameter(
-            name = "stream",
+        @McpToolParam(
             description = "Whether to stream results (default: true)",
             required = false
         ) Boolean stream
@@ -208,23 +198,20 @@ public class QueryTools {
     /**
      * Get EXPLAIN plan for a query
      */
-    @Tool(
+    @McpTool(
         name = "gp.explain",
         description = "Get detailed query execution plan using EXPLAIN (FORMAT JSON)."
     )
     public ExplainResult explain(
-        @ToolParameter(
-            name = "sqlTemplate",
+        @McpToolParam(
             description = "SQL SELECT template to explain",
             required = true
         ) String sqlTemplate,
-        @ToolParameter(
-            name = "params",
+        @McpToolParam(
             description = "Named parameters for the query",
             required = false
         ) Map<String, Object> params,
-        @ToolParameter(
-            name = "analyze",
+        @McpToolParam(
             description = "Whether to run ANALYZE (default: false - may execute the query)",
             required = false
         ) Boolean analyze
@@ -270,23 +257,20 @@ public class QueryTools {
     /**
      * Open a server-side cursor for large result sets
      */
-    @Tool(
+    @McpTool(
         name = "gp.openCursor",
         description = "Open a server-side cursor for streaming large result sets."
     )
     public CursorResult openCursor(
-        @ToolParameter(
-            name = "sqlTemplate",
+        @McpToolParam(
             description = "SQL SELECT template with named parameters",
             required = true
         ) String sqlTemplate,
-        @ToolParameter(
-            name = "params",
+        @McpToolParam(
             description = "Named parameters for the query",
             required = false
         ) Map<String, Object> params,
-        @ToolParameter(
-            name = "fetchSize",
+        @McpToolParam(
             description = "Number of rows to fetch per batch (default: 1000)",
             required = false
         ) Integer fetchSize
@@ -332,13 +316,12 @@ public class QueryTools {
     /**
      * Fetch rows from a cursor
      */
-    @Tool(
+    @McpTool(
         name = "gp.fetchCursor",
         description = "Fetch rows from a server-side cursor."
     )
     public CursorFetchResult fetchCursor(
-        @ToolParameter(
-            name = "cursorId",
+        @McpToolParam(
             description = "Cursor ID returned by gp.openCursor",
             required = true
         ) String cursorId
@@ -372,13 +355,12 @@ public class QueryTools {
     /**
      * Close a server-side cursor
      */
-    @Tool(
+    @McpTool(
         name = "gp.closeCursor",
         description = "Close a server-side cursor and free resources."
     )
     public CursorCloseResult closeCursor(
-        @ToolParameter(
-            name = "cursorId",
+        @McpToolParam(
             description = "Cursor ID to close",
             required = true
         ) String cursorId
@@ -406,15 +388,100 @@ public class QueryTools {
     }
 
     /**
+     * Get sample data from a table
+     */
+    @McpTool(
+        name = "gp.getSampleData",
+        description = "Get sample rows from a table to understand data format and values. Useful for AI to understand the table structure and content."
+    )
+    public SampleDataResult getSampleData(
+        @McpToolParam(
+            description = "Schema name",
+            required = true
+        ) String schemaName,
+        @McpToolParam(
+            description = "Table name",
+            required = true
+        ) String tableName,
+        @McpToolParam(
+            description = "Number of sample rows to return (default: 10, max: 100)",
+            required = false
+        ) Integer sampleSize,
+        @McpToolParam(
+            description = "Specific columns to return (comma-separated), or null for all columns",
+            required = false
+        ) String columns
+    ) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            queryCounter.increment();
+
+            int sampleSizeValue = sampleSize != null ? Math.min(sampleSize, 100) : 10;
+
+            log.debug("Getting sample data from {}.{} with {} rows", schemaName, tableName, sampleSizeValue);
+
+            // Validate SQL
+            String fullTableName = schemaName + "." + tableName;
+            SqlValidator.ValidationResult validation = sqlValidator.validate("SELECT * FROM " + fullTableName);
+            if (!validation.isValid()) {
+                throw new IllegalArgumentException("Table access validation failed: " + validation.getErrorMessage());
+            }
+
+            // Build column list
+            String columnList = "*";
+            if (columns != null && !columns.trim().isEmpty()) {
+                // Validate each column name to prevent SQL injection
+                String[] columnArray = columns.split(",");
+                for (String col : columnArray) {
+                    String trimmedCol = col.trim();
+                    if (!trimmedCol.matches("[a-zA-Z_][a-zA-Z0-9_]*")) {
+                        throw new IllegalArgumentException("Invalid column name: " + trimmedCol);
+                    }
+                }
+                columnList = columns;
+            }
+
+            // Execute sample query
+            String sql = String.format(
+                "SELECT %s FROM %s.%s LIMIT ?",
+                columnList,
+                quoteIdentifier(schemaName),
+                quoteIdentifier(tableName)
+            );
+
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, sampleSizeValue);
+
+            // Apply redaction
+            List<Map<String, Object>> redactedRows = applyRedaction(rows, fullTableName);
+
+            SampleDataResult result = new SampleDataResult();
+            result.setSchemaName(schemaName);
+            result.setTableName(tableName);
+            result.setRows(redactedRows);
+            result.setRowCount(redactedRows.size());
+            result.setSampleSize(sampleSizeValue);
+
+            log.info("✅ Retrieved {} sample rows from {}.{}", redactedRows.size(), schemaName, tableName);
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("❌ Failed to get sample data from {}.{}", schemaName, tableName, e);
+            throw new RuntimeException("Failed to get sample data: " + e.getMessage(), e);
+        } finally {
+            sample.stop(queryTimer);
+        }
+    }
+
+    /**
      * Cancel a running query
      */
-    @Tool(
+    @McpTool(
         name = "gp.cancel",
         description = "Cancel a running query by operation ID."
     )
     public CancelResult cancel(
-        @ToolParameter(
-            name = "operationId",
+        @McpToolParam(
             description = "Operation ID to cancel",
             required = true
         ) String operationId
@@ -429,7 +496,7 @@ public class QueryTools {
             result.setStatus("CANCELLED");
 
             log.info("✅ Operation cancelled: {}", operationId);
-            
+
             return result;
 
         } catch (Exception e) {
@@ -439,6 +506,10 @@ public class QueryTools {
     }
 
     // Helper methods
+    private String quoteIdentifier(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
     private String addLimitClause(String sql, int maxRows) {
         String upperSql = sql.toUpperCase().trim();
         if (!upperSql.contains("LIMIT")) {
@@ -531,5 +602,14 @@ public class QueryTools {
         private Map<String, Object> params;
         private int fetchSize;
         private long createdAt;
+    }
+
+    @Data
+    public static class SampleDataResult {
+        private String schemaName;
+        private String tableName;
+        private List<Map<String, Object>> rows;
+        private int rowCount;
+        private int sampleSize;
     }
 }

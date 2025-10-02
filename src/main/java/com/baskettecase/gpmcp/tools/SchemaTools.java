@@ -7,8 +7,8 @@ import io.micrometer.core.instrument.Timer;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.tool.Tool;
-import org.springframework.ai.tool.ToolParameter;
+import org.springaicommunity.mcp.annotation.McpTool;
+import org.springaicommunity.mcp.annotation.McpToolParam;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -51,28 +51,24 @@ public class SchemaTools {
     /**
      * List available schemas with optional pagination
      */
-    @Tool(
+    @McpTool(
         name = "gp.listSchemas",
         description = "List available database schemas with tables and columns. Supports pagination for large schemas."
     )
     public SchemaListResult listSchemas(
-        @ToolParameter(
-            name = "limit",
+        @McpToolParam(
             description = "Maximum number of schemas to return (default: 50)",
             required = false
         ) Integer limit,
-        @ToolParameter(
-            name = "offset",
+        @McpToolParam(
             description = "Number of schemas to skip (default: 0)",
             required = false
         ) Integer offset,
-        @ToolParameter(
-            name = "includeTables",
+        @McpToolParam(
             description = "Whether to include table information (default: true)",
             required = false
         ) Boolean includeTables,
-        @ToolParameter(
-            name = "includeColumns",
+        @McpToolParam(
             description = "Whether to include column information (default: false)",
             required = false
         ) Boolean includeColumns
@@ -93,21 +89,35 @@ public class SchemaTools {
             
             // Get allowed schemas from policy
             Set<String> allowedSchemas = policyService.getAllowedSchemas();
-            
+
+            if (allowedSchemas.isEmpty()) {
+                log.warn("No allowed schemas configured");
+                return new SchemaListResult(List.of(), 0, offsetValue, limitValue);
+            }
+
+            // Build IN clause for allowed schemas
+            String schemaPlaceholders = String.join(",", allowedSchemas.stream()
+                .map(s -> "?")
+                .toList());
+
             // Query database for schema information
-            String sql = """
-                SELECT schema_name, 
+            String sql = String.format("""
+                SELECT schema_name,
                        COUNT(table_name) as table_count
                 FROM information_schema.schemata s
                 LEFT JOIN information_schema.tables t ON s.schema_name = t.table_schema
-                WHERE schema_name = ANY(?)
+                WHERE schema_name IN (%s)
                 GROUP BY schema_name
                 ORDER BY schema_name
                 LIMIT ? OFFSET ?
-                """;
-            
-            List<Map<String, Object>> schemaRows = jdbcTemplate.queryForList(sql, 
-                    allowedSchemas.toArray(), limitValue, offsetValue);
+                """, schemaPlaceholders);
+
+            // Build parameters array
+            List<Object> params = new ArrayList<>(allowedSchemas);
+            params.add(limitValue);
+            params.add(offsetValue);
+
+            List<Map<String, Object>> schemaRows = jdbcTemplate.queryForList(sql, params.toArray());
             
             for (Map<String, Object> row : schemaRows) {
                 String schemaName = (String) row.get("schema_name");
@@ -243,6 +253,313 @@ public class SchemaTools {
         }
     }
 
+    /**
+     * List tables in a specific schema
+     */
+    @McpTool(
+        name = "gp.listTables",
+        description = "List all tables in a specific schema with metadata including row counts, size, and type."
+    )
+    public TableListResult listTables(
+        @McpToolParam(
+            description = "Schema name to list tables from",
+            required = true
+        ) String schemaName,
+        @McpToolParam(
+            description = "Maximum number of tables to return (default: 100)",
+            required = false
+        ) Integer limit,
+        @McpToolParam(
+            description = "Number of tables to skip (default: 0)",
+            required = false
+        ) Integer offset,
+        @McpToolParam(
+            description = "Include row count estimates (may be slow for large tables)",
+            required = false
+        ) Boolean includeRowCounts
+    ) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            schemaQueryCounter.increment();
+
+            int limitValue = limit != null ? Math.min(limit, 500) : 100;
+            int offsetValue = offset != null ? Math.max(offset, 0) : 0;
+            boolean includeRowCountsValue = includeRowCounts != null ? includeRowCounts : false;
+
+            log.debug("Listing tables in schema: {}, limit={}, offset={}", schemaName, limitValue, offsetValue);
+
+            // Validate schema access
+            if (!policyService.isSchemaAllowed(schemaName)) {
+                throw new SecurityException("Access denied to schema: " + schemaName);
+            }
+
+            String sql = """
+                SELECT
+                    t.table_name,
+                    t.table_type,
+                    pg_size_pretty(pg_total_relation_size(quote_ident(t.table_schema)||'.'||quote_ident(t.table_name))) as total_size,
+                    obj_description((quote_ident(t.table_schema)||'.'||quote_ident(t.table_name))::regclass) as table_comment
+                FROM information_schema.tables t
+                WHERE t.table_schema = ?
+                    AND t.table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY t.table_name
+                LIMIT ? OFFSET ?
+                """;
+
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, schemaName, limitValue, offsetValue);
+            List<TableMetadata> tables = new ArrayList<>();
+
+            for (Map<String, Object> row : rows) {
+                String tableName = (String) row.get("table_name");
+
+                // Check policy
+                if (!policyService.isTableAllowed(schemaName, tableName)) {
+                    continue;
+                }
+
+                TableMetadata metadata = new TableMetadata();
+                metadata.setSchemaName(schemaName);
+                metadata.setTableName(tableName);
+                metadata.setTableType((String) row.get("table_type"));
+                metadata.setTotalSize((String) row.get("total_size"));
+                metadata.setComment((String) row.get("table_comment"));
+
+                if (includeRowCountsValue) {
+                    try {
+                        Long rowCount = jdbcTemplate.queryForObject(
+                            "SELECT COUNT(*) FROM " + quote(schemaName) + "." + quote(tableName),
+                            Long.class
+                        );
+                        metadata.setRowCount(rowCount);
+                    } catch (Exception e) {
+                        log.warn("Failed to get row count for {}.{}: {}", schemaName, tableName, e.getMessage());
+                    }
+                }
+
+                tables.add(metadata);
+            }
+
+            log.info("✅ Listed {} tables in schema {} (limit={}, offset={})", tables.size(), schemaName, limitValue, offsetValue);
+
+            return new TableListResult(schemaName, tables, tables.size(), offsetValue, limitValue);
+
+        } catch (Exception e) {
+            log.error("❌ Failed to list tables in schema {}", schemaName, e);
+            throw new RuntimeException("Failed to list tables: " + e.getMessage(), e);
+        } finally {
+            sample.stop(schemaQueryTimer);
+        }
+    }
+
+    /**
+     * Get detailed schema for a specific table
+     */
+    @McpTool(
+        name = "gp.getTableSchema",
+        description = "Get detailed schema information for a specific table including columns, types, constraints, and indexes."
+    )
+    public TableSchemaResult getTableSchema(
+        @McpToolParam(
+            description = "Schema name",
+            required = true
+        ) String schemaName,
+        @McpToolParam(
+            description = "Table name",
+            required = true
+        ) String tableName
+    ) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            schemaQueryCounter.increment();
+
+            log.debug("Getting table schema for {}.{}", schemaName, tableName);
+
+            // Validate access
+            if (!policyService.isTableAllowed(schemaName, tableName)) {
+                throw new SecurityException("Access denied to table: " + schemaName + "." + tableName);
+            }
+
+            TableSchemaResult result = new TableSchemaResult();
+            result.setSchemaName(schemaName);
+            result.setTableName(tableName);
+
+            // Get columns with detailed info
+            String columnSql = """
+                SELECT
+                    c.column_name,
+                    c.data_type,
+                    c.character_maximum_length,
+                    c.numeric_precision,
+                    c.numeric_scale,
+                    c.is_nullable,
+                    c.column_default,
+                    c.ordinal_position,
+                    col_description((quote_ident(c.table_schema)||'.'||quote_ident(c.table_name))::regclass, c.ordinal_position) as column_comment
+                FROM information_schema.columns c
+                WHERE c.table_schema = ? AND c.table_name = ?
+                ORDER BY c.ordinal_position
+                """;
+
+            List<Map<String, Object>> columnRows = jdbcTemplate.queryForList(columnSql, schemaName, tableName);
+            List<ColumnDetail> columns = new ArrayList<>();
+
+            for (Map<String, Object> row : columnRows) {
+                String columnName = (String) row.get("column_name");
+
+                // Check policy
+                if (!policyService.isColumnAllowed(schemaName, tableName, columnName)) {
+                    continue;
+                }
+
+                ColumnDetail col = new ColumnDetail();
+                col.setName(columnName);
+                col.setDataType((String) row.get("data_type"));
+                col.setNullable("YES".equals(row.get("is_nullable")));
+                col.setDefaultValue((String) row.get("column_default"));
+                col.setOrdinalPosition(((Number) row.get("ordinal_position")).intValue());
+                col.setComment((String) row.get("column_comment"));
+
+                Object maxLength = row.get("character_maximum_length");
+                if (maxLength != null) {
+                    col.setMaxLength(((Number) maxLength).intValue());
+                }
+
+                Object precision = row.get("numeric_precision");
+                if (precision != null) {
+                    col.setPrecision(((Number) precision).intValue());
+                }
+
+                Object scale = row.get("numeric_scale");
+                if (scale != null) {
+                    col.setScale(((Number) scale).intValue());
+                }
+
+                columns.add(col);
+            }
+            result.setColumns(columns);
+
+            // Get primary key
+            try {
+                String pkSql = """
+                    SELECT string_agg(a.attname, ', ' ORDER BY array_position(conkey, a.attnum))
+                    FROM pg_constraint c
+                    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                    WHERE c.contype = 'p'
+                        AND c.conrelid = (quote_ident(?) || '.' || quote_ident(?))::regclass
+                    """;
+                String primaryKey = jdbcTemplate.queryForObject(pkSql, String.class, schemaName, tableName);
+                result.setPrimaryKey(primaryKey);
+            } catch (Exception e) {
+                log.debug("No primary key found for {}.{}", schemaName, tableName);
+            }
+
+            // Get indexes
+            try {
+                String indexSql = """
+                    SELECT
+                        i.indexname,
+                        i.indexdef
+                    FROM pg_indexes i
+                    WHERE i.schemaname = ? AND i.tablename = ?
+                    """;
+                List<Map<String, Object>> indexRows = jdbcTemplate.queryForList(indexSql, schemaName, tableName);
+                List<IndexInfo> indexes = new ArrayList<>();
+                for (Map<String, Object> row : indexRows) {
+                    IndexInfo idx = new IndexInfo();
+                    idx.setName((String) row.get("indexname"));
+                    idx.setDefinition((String) row.get("indexdef"));
+                    indexes.add(idx);
+                }
+                result.setIndexes(indexes);
+            } catch (Exception e) {
+                log.debug("No indexes found for {}.{}", schemaName, tableName);
+            }
+
+            log.info("✅ Retrieved schema for {}.{} with {} columns", schemaName, tableName, columns.size());
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("❌ Failed to get table schema for {}.{}", schemaName, tableName, e);
+            throw new RuntimeException("Failed to get table schema: " + e.getMessage(), e);
+        } finally {
+            sample.stop(schemaQueryTimer);
+        }
+    }
+
+    /**
+     * Get Greenplum-specific distribution information for a table
+     */
+    @McpTool(
+        name = "gp.getTableDistribution",
+        description = "Get Greenplum-specific distribution and partitioning information for a table."
+    )
+    public TableDistributionResult getTableDistribution(
+        @McpToolParam(
+            description = "Schema name",
+            required = true
+        ) String schemaName,
+        @McpToolParam(
+            description = "Table name",
+            required = true
+        ) String tableName
+    ) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            schemaQueryCounter.increment();
+
+            log.debug("Getting distribution info for {}.{}", schemaName, tableName);
+
+            // Validate access
+            if (!policyService.isTableAllowed(schemaName, tableName)) {
+                throw new SecurityException("Access denied to table: " + schemaName + "." + tableName);
+            }
+
+            TableDistributionResult result = new TableDistributionResult();
+            result.setSchemaName(schemaName);
+            result.setTableName(tableName);
+
+            // Get distribution policy
+            try {
+                String distSql = """
+                    SELECT
+                        CASE
+                            WHEN d.policytype = 'p' THEN 'PARTITIONED'
+                            WHEN d.policytype = 'r' THEN 'REPLICATED'
+                            ELSE 'RANDOM'
+                        END as distribution_type,
+                        string_agg(a.attname, ', ' ORDER BY array_position(d.distkey, a.attnum)) as distribution_columns
+                    FROM gp_distribution_policy d
+                    LEFT JOIN pg_attribute a ON a.attrelid = d.localoid AND a.attnum = ANY(d.distkey)
+                    WHERE d.localoid = (quote_ident(?) || '.' || quote_ident(?))::regclass
+                    GROUP BY d.policytype
+                    """;
+                Map<String, Object> distInfo = jdbcTemplate.queryForMap(distSql, schemaName, tableName);
+                result.setDistributionType((String) distInfo.get("distribution_type"));
+                result.setDistributionColumns((String) distInfo.get("distribution_columns"));
+            } catch (Exception e) {
+                log.debug("Could not get Greenplum distribution info (may not be a Greenplum database): {}", e.getMessage());
+                result.setDistributionType("UNKNOWN");
+                result.setDistributionColumns(null);
+            }
+
+            log.info("✅ Retrieved distribution info for {}.{}", schemaName, tableName);
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("❌ Failed to get distribution info for {}.{}", schemaName, tableName, e);
+            throw new RuntimeException("Failed to get distribution info: " + e.getMessage(), e);
+        } finally {
+            sample.stop(schemaQueryTimer);
+        }
+    }
+
+    // Helper method to quote identifiers
+    private String quote(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
     // Data classes for results
     @Data
     public static class SchemaListResult {
@@ -283,5 +600,68 @@ public class SchemaTools {
         private Integer maxLength;
         private Integer precision;
         private Integer scale;
+    }
+
+    @Data
+    public static class TableListResult {
+        private String schemaName;
+        private List<TableMetadata> tables;
+        private int count;
+        private int offset;
+        private int limit;
+
+        public TableListResult(String schemaName, List<TableMetadata> tables, int count, int offset, int limit) {
+            this.schemaName = schemaName;
+            this.tables = tables;
+            this.count = count;
+            this.offset = offset;
+            this.limit = limit;
+        }
+    }
+
+    @Data
+    public static class TableMetadata {
+        private String schemaName;
+        private String tableName;
+        private String tableType;
+        private String totalSize;
+        private String comment;
+        private Long rowCount;
+    }
+
+    @Data
+    public static class TableSchemaResult {
+        private String schemaName;
+        private String tableName;
+        private List<ColumnDetail> columns;
+        private String primaryKey;
+        private List<IndexInfo> indexes;
+    }
+
+    @Data
+    public static class ColumnDetail {
+        private String name;
+        private String dataType;
+        private boolean nullable;
+        private String defaultValue;
+        private Integer maxLength;
+        private Integer precision;
+        private Integer scale;
+        private int ordinalPosition;
+        private String comment;
+    }
+
+    @Data
+    public static class IndexInfo {
+        private String name;
+        private String definition;
+    }
+
+    @Data
+    public static class TableDistributionResult {
+        private String schemaName;
+        private String tableName;
+        private String distributionType;
+        private String distributionColumns;
     }
 }
