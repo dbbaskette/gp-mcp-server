@@ -58,19 +58,55 @@ public class PolicyService {
     }
 
     /**
-     * Validate if a table is allowed
+     * Validate if a table is allowed (supports wildcards)
      */
     public boolean isTableAllowed(String schemaName, String tableName) {
         String key = schemaName.toLowerCase() + "." + tableName.toLowerCase();
-        return policy.getAllowedTables().contains(key);
+
+        // Check for exact match first
+        if (policy.getAllowedTables().contains(key)) {
+            return true;
+        }
+
+        // Check for wildcard patterns
+        for (String allowedPattern : policy.getAllowedTables()) {
+            if (allowedPattern.contains("*")) {
+                // Convert wildcard pattern to regex
+                String regex = allowedPattern
+                    .replace(".", "\\.")
+                    .replace("*", ".*");
+                if (key.matches(regex)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
-     * Validate if a column is allowed
+     * Validate if a column is allowed (supports wildcards)
      */
     public boolean isColumnAllowed(String schemaName, String tableName, String columnName) {
         String key = schemaName.toLowerCase() + "." + tableName.toLowerCase() + "." + columnName.toLowerCase();
-        return policy.getAllowedColumns().contains(key);
+
+        // Check for exact match first
+        if (policy.getAllowedColumns().contains(key)) {
+            return true;
+        }
+
+        // Check for wildcard patterns (e.g., "*" allows all columns)
+        if (policy.getAllowedColumns().contains("*")) {
+            return true;
+        }
+
+        // Check for schema.table.* pattern
+        String tablePattern = schemaName.toLowerCase() + "." + tableName.toLowerCase() + ".*";
+        if (policy.getAllowedColumns().contains(tablePattern)) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
