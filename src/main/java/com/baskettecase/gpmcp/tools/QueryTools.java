@@ -2,6 +2,7 @@ package com.baskettecase.gpmcp.tools;
 
 import com.baskettecase.gpmcp.policy.PolicyService;
 import com.baskettecase.gpmcp.sql.SqlValidator;
+import com.baskettecase.gpmcp.util.JsonResponseFormatter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -58,9 +59,9 @@ public class QueryTools {
      */
     @McpTool(
         name = "gp.previewQuery",
-        description = "Preview and validate a SELECT query without executing it. Returns query plan and validation results."
+        description = "Preview and validate a SELECT query without executing it. Returns validation issues as JSON table if any exist."
     )
-    public QueryPreviewResult previewQuery(
+    public String previewQuery(
         @McpToolParam(
             description = "SQL SELECT template with named parameters (e.g., 'SELECT * FROM users WHERE id = :id')",
             required = true
@@ -76,36 +77,63 @@ public class QueryTools {
 
             // Validate SQL syntax and permissions
             SqlValidator.ValidationResult validation = sqlValidator.validate(sqlTemplate);
-            
-            QueryPreviewResult result = new QueryPreviewResult();
-            result.setSqlTemplate(sqlTemplate);
-            result.setValid(validation.isValid());
-            result.setErrors(validation.errors());
-            result.setWarnings(validation.warnings());
 
-            if (validation.isValid()) {
-                // Get query plan via EXPLAIN
-                try {
-                    String explainSql = "EXPLAIN (FORMAT JSON) " + sqlTemplate;
-                    List<Map<String, Object>> planRows = jdbcTemplate.queryForList(explainSql, 
-                            params != null ? params.values().toArray() : new Object[0]);
-                    
-                    if (!planRows.isEmpty()) {
-                        result.setQueryPlan(planRows.get(0));
-                    }
-                    
-                    result.setEstimatedRows(getEstimatedRows(planRows));
-                    
-                } catch (Exception e) {
-                    result.setValid(false);
-                    result.getErrors().add("Query plan generation failed: " + e.getMessage());
-                }
+            List<Map<String, Object>> issues = new ArrayList<>();
+
+            // Add errors to issues list
+            for (String error : validation.errors()) {
+                Map<String, Object> issue = new LinkedHashMap<>();
+                issue.put("severity", "ERROR");
+                issue.put("message", error);
+                issues.add(issue);
             }
 
-            log.info("✅ Query preview completed: valid={}, errors={}", 
-                    result.isValid(), result.getErrors().size());
-            
-            return result;
+            // Add warnings to issues list
+            for (String warning : validation.warnings()) {
+                Map<String, Object> issue = new LinkedHashMap<>();
+                issue.put("severity", "WARNING");
+                issue.put("message", warning);
+                issues.add(issue);
+            }
+
+            if (validation.isValid()) {
+                // Try to get estimated rows
+                try {
+                    String explainSql = "EXPLAIN (FORMAT JSON) " + sqlTemplate;
+                    List<Map<String, Object>> planRows = jdbcTemplate.queryForList(explainSql,
+                            params != null ? params.values().toArray() : new Object[0]);
+
+                    Long estimatedRows = getEstimatedRows(planRows);
+
+                    log.info("✅ Query preview completed: valid=true, estimated_rows={}", estimatedRows);
+
+                    if (issues.isEmpty()) {
+                        return String.format("✅ Query is valid.\n\nEstimated rows: %d\n\nQuery is ready to execute.",
+                                estimatedRows != null ? estimatedRows : 0);
+                    } else {
+                        // Has warnings but is valid
+                        String message = String.format("✅ Query is valid with %d warning(s). Estimated rows: %d",
+                                validation.warnings().size(), estimatedRows != null ? estimatedRows : 0);
+                        return message + "\n\n" + JsonResponseFormatter.formatAsJsonTable(issues);
+                    }
+
+                } catch (Exception e) {
+                    Map<String, Object> issue = new LinkedHashMap<>();
+                    issue.put("severity", "WARNING");
+                    issue.put("message", "Could not generate query plan: " + e.getMessage());
+                    issues.add(issue);
+
+                    String message = "✅ Query syntax is valid but query plan could not be generated:";
+                    return message + "\n\n" + JsonResponseFormatter.formatAsJsonTable(issues);
+                }
+            } else {
+                log.info("❌ Query preview completed: valid=false, errors={}", validation.errors().size());
+
+                // Invalid query - show errors and warnings
+                String message = String.format("❌ Query validation failed with %d error(s) and %d warning(s):",
+                        validation.errors().size(), validation.warnings().size());
+                return message + "\n\n" + JsonResponseFormatter.formatAsJsonTable(issues);
+            }
 
         } catch (Exception e) {
             log.error("❌ Query preview failed", e);
@@ -122,7 +150,7 @@ public class QueryTools {
         name = "gp.runQuery",
         description = "Execute a parameterized SELECT query with streaming support and policy enforcement."
     )
-    public QueryResult runQuery(
+    public String runQuery(
         @McpToolParam(
             description = "SQL SELECT template with named parameters",
             required = true
@@ -143,10 +171,10 @@ public class QueryTools {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             queryCounter.increment();
-            
+
             int maxRowsValue = maxRows != null ? Math.min(maxRows, policyService.getMaxRows()) : 1000;
             boolean streamValue = stream != null ? stream : true;
-            
+
             log.debug("Executing query: {} with maxRows={}, stream={}", sqlTemplate, maxRowsValue, streamValue);
 
             // Validate SQL
@@ -157,17 +185,17 @@ public class QueryTools {
 
             // Add LIMIT clause if not present
             String finalSql = addLimitClause(sqlTemplate, maxRowsValue);
-            
+
             // Execute query
             List<Map<String, Object>> rows = new ArrayList<>();
             int actualRowCount = 0;
-            
+
             if (streamValue) {
                 // Stream results
                 actualRowCount = executeStreamingQuery(finalSql, params, rows, maxRowsValue);
             } else {
                 // Execute normally
-                rows = jdbcTemplate.queryForList(finalSql, 
+                rows = jdbcTemplate.queryForList(finalSql,
                         params != null ? params.values().toArray() : new Object[0]);
                 actualRowCount = rows.size();
             }
@@ -175,17 +203,14 @@ public class QueryTools {
             // Apply redaction
             List<Map<String, Object>> redactedRows = applyRedaction(rows, sqlTemplate);
 
-            QueryResult result = new QueryResult();
-            result.setSql(finalSql);
-            result.setRows(redactedRows);
-            result.setRowCount(actualRowCount);
-            result.setMaxRows(maxRowsValue);
-            result.setStreamed(streamValue);
-            result.setWarnings(validation.warnings());
-
             log.info("✅ Query executed: {} rows returned (max: {})", actualRowCount, maxRowsValue);
-            
-            return result;
+
+            // Return JSON-formatted results for table rendering in frontend
+            if (redactedRows.isEmpty()) {
+                return "Query executed successfully. No rows returned.";
+            }
+
+            return JsonResponseFormatter.formatWithRowCount(actualRowCount, redactedRows);
 
         } catch (Exception e) {
             log.error("❌ Query execution failed", e);
@@ -200,9 +225,9 @@ public class QueryTools {
      */
     @McpTool(
         name = "gp.explain",
-        description = "Get detailed query execution plan using EXPLAIN (FORMAT JSON)."
+        description = "Get detailed query execution plan using EXPLAIN. Returns flattened plan as JSON table."
     )
-    public ExplainResult explain(
+    public String explain(
         @McpToolParam(
             description = "SQL SELECT template to explain",
             required = true
@@ -219,7 +244,7 @@ public class QueryTools {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             boolean analyzeValue = analyze != null ? analyze : false;
-            
+
             log.debug("Explaining query: {} with analyze={}", sqlTemplate, analyzeValue);
 
             // Validate SQL
@@ -228,23 +253,36 @@ public class QueryTools {
                 throw new IllegalArgumentException("Query validation failed: " + validation.getErrorMessage());
             }
 
-            String explainSql = analyzeValue ? 
-                "EXPLAIN (ANALYZE, FORMAT JSON) " + sqlTemplate :
-                "EXPLAIN (FORMAT JSON) " + sqlTemplate;
+            // Use text format for simpler parsing
+            String explainSql = analyzeValue ?
+                "EXPLAIN (ANALYZE, VERBOSE) " + sqlTemplate :
+                "EXPLAIN (VERBOSE) " + sqlTemplate;
 
-            List<Map<String, Object>> planRows = jdbcTemplate.queryForList(explainSql, 
+            List<Map<String, Object>> planRows = jdbcTemplate.queryForList(explainSql,
                     params != null ? params.values().toArray() : new Object[0]);
 
-            ExplainResult result = new ExplainResult();
-            result.setSql(sqlTemplate);
-            result.setAnalyzed(analyzeValue);
-            result.setQueryPlan(planRows.isEmpty() ? null : planRows.get(0));
-            result.setEstimatedRows(getEstimatedRows(planRows));
-            result.setWarnings(validation.warnings());
+            log.info("✅ Query explained: analyzed={}, plan_rows={}", analyzeValue, planRows.size());
 
-            log.info("✅ Query explained: analyzed={}", analyzeValue);
-            
-            return result;
+            // Convert EXPLAIN output to table format
+            List<Map<String, Object>> planTable = new ArrayList<>();
+            for (Map<String, Object> row : planRows) {
+                Map<String, Object> planStep = new LinkedHashMap<>();
+                // The EXPLAIN output typically comes back in a single column
+                Object queryPlan = row.values().iterator().next();
+                if (queryPlan != null) {
+                    planStep.put("plan_step", queryPlan.toString().trim());
+                    planTable.add(planStep);
+                }
+            }
+
+            // Return JSON-formatted results for table rendering in frontend
+            if (planTable.isEmpty()) {
+                return "No query plan available.";
+            }
+
+            String message = String.format("Query execution plan%s:",
+                    analyzeValue ? " (with ANALYZE - query was executed)" : "");
+            return message + "\n\n" + JsonResponseFormatter.formatAsJsonTable(planTable);
 
         } catch (Exception e) {
             log.error("❌ Query explanation failed", e);
@@ -261,7 +299,7 @@ public class QueryTools {
         name = "gp.openCursor",
         description = "Open a server-side cursor for streaming large result sets."
     )
-    public CursorResult openCursor(
+    public String openCursor(
         @McpToolParam(
             description = "SQL SELECT template with named parameters",
             required = true
@@ -277,7 +315,7 @@ public class QueryTools {
     ) {
         try {
             int fetchSizeValue = fetchSize != null ? Math.min(fetchSize, 5000) : 1000;
-            
+
             log.debug("Opening cursor for query: {} with fetchSize={}", sqlTemplate, fetchSizeValue);
 
             // Validate SQL
@@ -287,7 +325,7 @@ public class QueryTools {
             }
 
             String cursorId = "cursor_" + cursorIdGenerator.getAndIncrement();
-            
+
             // Create cursor info
             CursorInfo cursorInfo = new CursorInfo();
             cursorInfo.setId(cursorId);
@@ -295,17 +333,13 @@ public class QueryTools {
             cursorInfo.setParams(params);
             cursorInfo.setFetchSize(fetchSizeValue);
             cursorInfo.setCreatedAt(System.currentTimeMillis());
-            
+
             cursors.put(cursorId, cursorInfo);
 
-            CursorResult result = new CursorResult();
-            result.setCursorId(cursorId);
-            result.setFetchSize(fetchSizeValue);
-            result.setStatus("OPENED");
-
             log.info("✅ Cursor opened: {}", cursorId);
-            
-            return result;
+
+            return String.format("✅ Cursor '%s' opened successfully with fetch size %d.\n\nUse gp.fetchCursor to retrieve rows in batches.",
+                    cursorId, fetchSizeValue);
 
         } catch (Exception e) {
             log.error("❌ Cursor opening failed", e);
@@ -318,9 +352,9 @@ public class QueryTools {
      */
     @McpTool(
         name = "gp.fetchCursor",
-        description = "Fetch rows from a server-side cursor."
+        description = "Fetch rows from a server-side cursor. Returns JSON table format."
     )
-    public CursorFetchResult fetchCursor(
+    public String fetchCursor(
         @McpToolParam(
             description = "Cursor ID returned by gp.openCursor",
             required = true
@@ -336,15 +370,16 @@ public class QueryTools {
 
             // For now, return a placeholder - in a real implementation,
             // this would use PostgreSQL cursors or similar
-            CursorFetchResult result = new CursorFetchResult();
-            result.setCursorId(cursorId);
-            result.setRows(Collections.emptyList());
-            result.setHasMore(false);
-            result.setTotalFetched(0);
+            List<Map<String, Object>> rows = Collections.emptyList();
 
             log.info("✅ Cursor fetch completed: {}", cursorId);
-            
-            return result;
+
+            // Return JSON-formatted results for table rendering in frontend
+            if (rows.isEmpty()) {
+                return String.format("No more rows available from cursor %s", cursorId);
+            }
+
+            return JsonResponseFormatter.formatWithRowCount(rows.size(), rows);
 
         } catch (Exception e) {
             log.error("❌ Cursor fetch failed", e);
@@ -359,7 +394,7 @@ public class QueryTools {
         name = "gp.closeCursor",
         description = "Close a server-side cursor and free resources."
     )
-    public CursorCloseResult closeCursor(
+    public String closeCursor(
         @McpToolParam(
             description = "Cursor ID to close",
             required = true
@@ -373,13 +408,9 @@ public class QueryTools {
                 throw new IllegalArgumentException("Cursor not found: " + cursorId);
             }
 
-            CursorCloseResult result = new CursorCloseResult();
-            result.setCursorId(cursorId);
-            result.setStatus("CLOSED");
-
             log.info("✅ Cursor closed: {}", cursorId);
-            
-            return result;
+
+            return String.format("✅ Cursor '%s' closed successfully. Resources have been freed.", cursorId);
 
         } catch (Exception e) {
             log.error("❌ Cursor close failed", e);
@@ -394,7 +425,7 @@ public class QueryTools {
         name = "gp.getSampleData",
         description = "Get sample rows from a table to understand data format and values. Useful for AI to understand the table structure and content."
     )
-    public SampleDataResult getSampleData(
+    public String getSampleData(
         @McpToolParam(
             description = "Schema name",
             required = true
@@ -454,16 +485,15 @@ public class QueryTools {
             // Apply redaction
             List<Map<String, Object>> redactedRows = applyRedaction(rows, fullTableName);
 
-            SampleDataResult result = new SampleDataResult();
-            result.setSchemaName(schemaName);
-            result.setTableName(tableName);
-            result.setRows(redactedRows);
-            result.setRowCount(redactedRows.size());
-            result.setSampleSize(sampleSizeValue);
-
             log.info("✅ Retrieved {} sample rows from {}.{}", redactedRows.size(), schemaName, tableName);
 
-            return result;
+            // Return JSON-formatted results for table rendering in frontend
+            if (redactedRows.isEmpty()) {
+                return String.format("No data found in table %s.%s", schemaName, tableName);
+            }
+
+            String message = String.format("Sample data from %s.%s (%d rows):", schemaName, tableName, redactedRows.size());
+            return JsonResponseFormatter.formatWithMessage(message, redactedRows);
 
         } catch (Exception e) {
             log.error("❌ Failed to get sample data from {}.{}", schemaName, tableName, e);
@@ -480,7 +510,7 @@ public class QueryTools {
         name = "gp.cancel",
         description = "Cancel a running query by operation ID."
     )
-    public CancelResult cancel(
+    public String cancel(
         @McpToolParam(
             description = "Operation ID to cancel",
             required = true
@@ -491,13 +521,10 @@ public class QueryTools {
 
             // For now, return a placeholder - in a real implementation,
             // this would track running queries and cancel them
-            CancelResult result = new CancelResult();
-            result.setOperationId(operationId);
-            result.setStatus("CANCELLED");
 
             log.info("✅ Operation cancelled: {}", operationId);
 
-            return result;
+            return String.format("✅ Operation '%s' has been cancelled.", operationId);
 
         } catch (Exception e) {
             log.error("❌ Operation cancellation failed", e);

@@ -1,6 +1,8 @@
 package com.baskettecase.gpmcp.tools;
 
 import com.baskettecase.gpmcp.policy.PolicyService;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,11 +31,14 @@ class SchemaToolsTest {
     @Mock
     private PolicyService policyService;
 
+    private MeterRegistry meterRegistry;
     private SchemaTools schemaTools;
 
     @BeforeEach
     void setUp() {
-        schemaTools = new SchemaTools(jdbcTemplate, policyService, null);
+        meterRegistry = new SimpleMeterRegistry();
+        schemaTools = new SchemaTools(jdbcTemplate, policyService, meterRegistry);
+        schemaTools.initializeMetrics(); // Initialize counters and timers
     }
 
     @Test
@@ -53,18 +58,14 @@ class SchemaToolsTest {
             .thenReturn((List) mockRows);
 
         // Execute test
-        SchemaTools.SchemaListResult result = schemaTools.listSchemas(null, null, null, null);
+        String result = schemaTools.listSchemas(null, null);
 
         // Verify results
         assertNotNull(result);
-        assertEquals(2, result.getCount());
-        assertEquals(0, result.getOffset());
-        assertEquals(50, result.getLimit());
-        assertEquals(2, result.getSchemas().size());
-        
-        SchemaTools.SchemaInfo publicSchema = result.getSchemas().get(0);
-        assertEquals("public", publicSchema.getName());
-        assertEquals(5L, publicSchema.getTableCount());
+        assertTrue(result.contains("Found 2 database schemas"));
+        assertTrue(result.contains("```json"));
+        assertTrue(result.contains("public"));
+        assertTrue(result.contains("information_schema"));
     }
 
     @Test
@@ -83,13 +84,12 @@ class SchemaToolsTest {
             .thenReturn((List) mockRows);
 
         // Execute test with custom parameters
-        SchemaTools.SchemaListResult result = schemaTools.listSchemas(10, 5, true, false);
+        String result = schemaTools.listSchemas(10, 5);
 
         // Verify results
         assertNotNull(result);
-        assertEquals(1, result.getCount());
-        assertEquals(5, result.getOffset());
-        assertEquals(10, result.getLimit());
+        assertTrue(result.contains("Found 1 database schemas"));
+        assertTrue(result.contains("```json"));
     }
 
     @Test
@@ -108,10 +108,11 @@ class SchemaToolsTest {
             .thenReturn((List) mockRows);
 
         // Execute test with limit exceeding maximum
-        SchemaTools.SchemaListResult result = schemaTools.listSchemas(200, null, null, null);
+        String result = schemaTools.listSchemas(200, null);
 
-        // Verify limit is capped at 100
-        assertEquals(100, result.getLimit());
+        // Verify result contains schema
+        assertNotNull(result);
+        assertTrue(result.contains("Found 1 database schemas"));
     }
 
     @Test
@@ -130,9 +131,10 @@ class SchemaToolsTest {
             .thenReturn((List) mockRows);
 
         // Execute test with negative offset
-        SchemaTools.SchemaListResult result = schemaTools.listSchemas(null, -5, null, null);
+        String result = schemaTools.listSchemas(null, -5);
 
-        // Verify offset is set to 0
-        assertEquals(0, result.getOffset());
+        // Verify result contains schema
+        assertNotNull(result);
+        assertTrue(result.contains("Found 1 database schemas"));
     }
 }

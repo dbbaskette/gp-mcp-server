@@ -1,6 +1,7 @@
 package com.baskettecase.gpmcp.tools;
 
 import com.baskettecase.gpmcp.policy.PolicyService;
+import com.baskettecase.gpmcp.util.JsonResponseFormatter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -53,9 +54,9 @@ public class SchemaTools {
      */
     @McpTool(
         name = "gp.listSchemas",
-        description = "List available database schemas with tables and columns. Supports pagination for large schemas."
+        description = "List available database schemas with table counts. Returns JSON table format."
     )
-    public SchemaListResult listSchemas(
+    public String listSchemas(
         @McpToolParam(
             description = "Maximum number of schemas to return (default: 50)",
             required = false
@@ -63,36 +64,23 @@ public class SchemaTools {
         @McpToolParam(
             description = "Number of schemas to skip (default: 0)",
             required = false
-        ) Integer offset,
-        @McpToolParam(
-            description = "Whether to include table information (default: true)",
-            required = false
-        ) Boolean includeTables,
-        @McpToolParam(
-            description = "Whether to include column information (default: false)",
-            required = false
-        ) Boolean includeColumns
+        ) Integer offset
     ) {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             schemaQueryCounter.increment();
-            
+
             int limitValue = limit != null ? Math.min(limit, 100) : 50;
             int offsetValue = offset != null ? Math.max(offset, 0) : 0;
-            boolean includeTablesValue = includeTables != null ? includeTables : true;
-            boolean includeColumnsValue = includeColumns != null ? includeColumns : false;
 
-            log.debug("Listing schemas: limit={}, offset={}, includeTables={}, includeColumns={}", 
-                    limitValue, offsetValue, includeTablesValue, includeColumnsValue);
+            log.debug("Listing schemas: limit={}, offset={}", limitValue, offsetValue);
 
-            List<SchemaInfo> schemas = new ArrayList<>();
-            
             // Get allowed schemas from policy
             Set<String> allowedSchemas = policyService.getAllowedSchemas();
 
             if (allowedSchemas.isEmpty()) {
                 log.warn("No allowed schemas configured");
-                return new SchemaListResult(List.of(), 0, offsetValue, limitValue);
+                return "No schemas are accessible according to policy configuration.";
             }
 
             // Build IN clause for allowed schemas
@@ -118,26 +106,25 @@ public class SchemaTools {
             params.add(offsetValue);
 
             List<Map<String, Object>> schemaRows = jdbcTemplate.queryForList(sql, params.toArray());
-            
+
+            List<Map<String, Object>> schemas = new ArrayList<>();
             for (Map<String, Object> row : schemaRows) {
-                String schemaName = (String) row.get("schema_name");
-                Long tableCount = ((Number) row.get("table_count")).longValue();
-                
-                SchemaInfo schemaInfo = new SchemaInfo();
-                schemaInfo.setName(schemaName);
-                schemaInfo.setTableCount(tableCount);
-                
-                if (includeTablesValue) {
-                    schemaInfo.setTables(getTablesForSchema(schemaName, includeColumnsValue));
-                }
-                
-                schemas.add(schemaInfo);
+                Map<String, Object> schemaData = new LinkedHashMap<>();
+                schemaData.put("schema", row.get("schema_name"));
+                schemaData.put("table_count", row.get("table_count"));
+                schemas.add(schemaData);
             }
-            
+
             log.info("✅ Listed {} schemas (limit={}, offset={})", schemas.size(), limitValue, offsetValue);
-            
-            return new SchemaListResult(schemas, schemas.size(), offsetValue, limitValue);
-            
+
+            // Return JSON-formatted results for table rendering in frontend
+            if (schemas.isEmpty()) {
+                return "No schemas found.";
+            }
+
+            String message = String.format("Found %d database schemas:", schemas.size());
+            return JsonResponseFormatter.formatWithMessage(message, schemas);
+
         } catch (Exception e) {
             log.error("❌ Failed to list schemas", e);
             throw new RuntimeException("Failed to list schemas: " + e.getMessage(), e);
@@ -260,7 +247,7 @@ public class SchemaTools {
         name = "gp.listTables",
         description = "List all tables in a specific schema with metadata including row counts, size, and type."
     )
-    public TableListResult listTables(
+    public String listTables(
         @McpToolParam(
             description = "Schema name to list tables from",
             required = true
@@ -307,7 +294,7 @@ public class SchemaTools {
                 """;
 
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, schemaName, limitValue, offsetValue);
-            List<TableMetadata> tables = new ArrayList<>();
+            List<Map<String, Object>> tables = new ArrayList<>();
 
             for (Map<String, Object> row : rows) {
                 String tableName = (String) row.get("table_name");
@@ -317,12 +304,15 @@ public class SchemaTools {
                     continue;
                 }
 
-                TableMetadata metadata = new TableMetadata();
-                metadata.setSchemaName(schemaName);
-                metadata.setTableName(tableName);
-                metadata.setTableType((String) row.get("table_type"));
-                metadata.setTotalSize((String) row.get("total_size"));
-                metadata.setComment((String) row.get("table_comment"));
+                Map<String, Object> tableData = new LinkedHashMap<>();
+                tableData.put("schema", schemaName);
+                tableData.put("table", tableName);
+                tableData.put("type", row.get("table_type"));
+                tableData.put("size", row.get("total_size"));
+
+                if (row.get("table_comment") != null) {
+                    tableData.put("comment", row.get("table_comment"));
+                }
 
                 if (includeRowCountsValue) {
                     try {
@@ -330,18 +320,24 @@ public class SchemaTools {
                             "SELECT COUNT(*) FROM " + quote(schemaName) + "." + quote(tableName),
                             Long.class
                         );
-                        metadata.setRowCount(rowCount);
+                        tableData.put("row_count", rowCount);
                     } catch (Exception e) {
                         log.warn("Failed to get row count for {}.{}: {}", schemaName, tableName, e.getMessage());
                     }
                 }
 
-                tables.add(metadata);
+                tables.add(tableData);
             }
 
             log.info("✅ Listed {} tables in schema {} (limit={}, offset={})", tables.size(), schemaName, limitValue, offsetValue);
 
-            return new TableListResult(schemaName, tables, tables.size(), offsetValue, limitValue);
+            // Return JSON-formatted results for table rendering in frontend
+            if (tables.isEmpty()) {
+                return String.format("No tables found in schema '%s'.", schemaName);
+            }
+
+            String message = String.format("Found %d tables in schema '%s':", tables.size(), schemaName);
+            return JsonResponseFormatter.formatWithMessage(message, tables);
 
         } catch (Exception e) {
             log.error("❌ Failed to list tables in schema {}", schemaName, e);
@@ -358,7 +354,7 @@ public class SchemaTools {
         name = "gp.getTableSchema",
         description = "Get detailed schema information for a specific table including columns, types, constraints, and indexes."
     )
-    public TableSchemaResult getTableSchema(
+    public String getTableSchema(
         @McpToolParam(
             description = "Schema name",
             required = true
@@ -379,10 +375,6 @@ public class SchemaTools {
                 throw new SecurityException("Access denied to table: " + schemaName + "." + tableName);
             }
 
-            TableSchemaResult result = new TableSchemaResult();
-            result.setSchemaName(schemaName);
-            result.setTableName(tableName);
-
             // Get columns with detailed info
             String columnSql = """
                 SELECT
@@ -401,7 +393,7 @@ public class SchemaTools {
                 """;
 
             List<Map<String, Object>> columnRows = jdbcTemplate.queryForList(columnSql, schemaName, tableName);
-            List<ColumnDetail> columns = new ArrayList<>();
+            List<Map<String, Object>> columns = new ArrayList<>();
 
             for (Map<String, Object> row : columnRows) {
                 String columnName = (String) row.get("column_name");
@@ -411,73 +403,46 @@ public class SchemaTools {
                     continue;
                 }
 
-                ColumnDetail col = new ColumnDetail();
-                col.setName(columnName);
-                col.setDataType((String) row.get("data_type"));
-                col.setNullable("YES".equals(row.get("is_nullable")));
-                col.setDefaultValue((String) row.get("column_default"));
-                col.setOrdinalPosition(((Number) row.get("ordinal_position")).intValue());
-                col.setComment((String) row.get("column_comment"));
+                Map<String, Object> columnData = new LinkedHashMap<>();
+                columnData.put("column", columnName);
 
+                // Build type string with length/precision
+                String dataType = (String) row.get("data_type");
                 Object maxLength = row.get("character_maximum_length");
-                if (maxLength != null) {
-                    col.setMaxLength(((Number) maxLength).intValue());
-                }
-
                 Object precision = row.get("numeric_precision");
-                if (precision != null) {
-                    col.setPrecision(((Number) precision).intValue());
-                }
-
                 Object scale = row.get("numeric_scale");
-                if (scale != null) {
-                    col.setScale(((Number) scale).intValue());
+
+                if (maxLength != null) {
+                    dataType += "(" + maxLength + ")";
+                } else if (precision != null && scale != null) {
+                    dataType += "(" + precision + "," + scale + ")";
+                } else if (precision != null) {
+                    dataType += "(" + precision + ")";
                 }
 
-                columns.add(col);
-            }
-            result.setColumns(columns);
+                columnData.put("type", dataType);
+                columnData.put("nullable", "YES".equals(row.get("is_nullable")) ? "YES" : "NO");
 
-            // Get primary key
-            try {
-                String pkSql = """
-                    SELECT string_agg(a.attname, ', ' ORDER BY array_position(conkey, a.attnum))
-                    FROM pg_constraint c
-                    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-                    WHERE c.contype = 'p'
-                        AND c.conrelid = (quote_ident(?) || '.' || quote_ident(?))::regclass
-                    """;
-                String primaryKey = jdbcTemplate.queryForObject(pkSql, String.class, schemaName, tableName);
-                result.setPrimaryKey(primaryKey);
-            } catch (Exception e) {
-                log.debug("No primary key found for {}.{}", schemaName, tableName);
-            }
-
-            // Get indexes
-            try {
-                String indexSql = """
-                    SELECT
-                        i.indexname,
-                        i.indexdef
-                    FROM pg_indexes i
-                    WHERE i.schemaname = ? AND i.tablename = ?
-                    """;
-                List<Map<String, Object>> indexRows = jdbcTemplate.queryForList(indexSql, schemaName, tableName);
-                List<IndexInfo> indexes = new ArrayList<>();
-                for (Map<String, Object> row : indexRows) {
-                    IndexInfo idx = new IndexInfo();
-                    idx.setName((String) row.get("indexname"));
-                    idx.setDefinition((String) row.get("indexdef"));
-                    indexes.add(idx);
+                if (row.get("column_default") != null) {
+                    columnData.put("default", row.get("column_default"));
                 }
-                result.setIndexes(indexes);
-            } catch (Exception e) {
-                log.debug("No indexes found for {}.{}", schemaName, tableName);
+
+                if (row.get("column_comment") != null) {
+                    columnData.put("comment", row.get("column_comment"));
+                }
+
+                columns.add(columnData);
             }
 
             log.info("✅ Retrieved schema for {}.{} with {} columns", schemaName, tableName, columns.size());
 
-            return result;
+            // Return JSON-formatted results for table rendering in frontend
+            if (columns.isEmpty()) {
+                return String.format("No columns found in table %s.%s", schemaName, tableName);
+            }
+
+            String message = String.format("Schema for table %s.%s (%d columns):", schemaName, tableName, columns.size());
+            return JsonResponseFormatter.formatWithMessage(message, columns);
 
         } catch (Exception e) {
             log.error("❌ Failed to get table schema for {}.{}", schemaName, tableName, e);
@@ -492,9 +457,9 @@ public class SchemaTools {
      */
     @McpTool(
         name = "gp.getTableDistribution",
-        description = "Get Greenplum-specific distribution and partitioning information for a table."
+        description = "Get Greenplum-specific distribution and partitioning information for a table. Returns JSON table format."
     )
-    public TableDistributionResult getTableDistribution(
+    public String getTableDistribution(
         @McpToolParam(
             description = "Schema name",
             required = true
@@ -515,9 +480,10 @@ public class SchemaTools {
                 throw new SecurityException("Access denied to table: " + schemaName + "." + tableName);
             }
 
-            TableDistributionResult result = new TableDistributionResult();
-            result.setSchemaName(schemaName);
-            result.setTableName(tableName);
+            List<Map<String, Object>> distributionInfo = new ArrayList<>();
+            Map<String, Object> distData = new LinkedHashMap<>();
+            distData.put("schema", schemaName);
+            distData.put("table", tableName);
 
             // Get distribution policy
             try {
@@ -535,17 +501,23 @@ public class SchemaTools {
                     GROUP BY d.policytype
                     """;
                 Map<String, Object> distInfo = jdbcTemplate.queryForMap(distSql, schemaName, tableName);
-                result.setDistributionType((String) distInfo.get("distribution_type"));
-                result.setDistributionColumns((String) distInfo.get("distribution_columns"));
+                distData.put("distribution_type", distInfo.get("distribution_type"));
+                if (distInfo.get("distribution_columns") != null) {
+                    distData.put("distribution_columns", distInfo.get("distribution_columns"));
+                }
             } catch (Exception e) {
                 log.debug("Could not get Greenplum distribution info (may not be a Greenplum database): {}", e.getMessage());
-                result.setDistributionType("UNKNOWN");
-                result.setDistributionColumns(null);
+                distData.put("distribution_type", "UNKNOWN");
+                distData.put("note", "Not a Greenplum database or distribution info unavailable");
             }
+
+            distributionInfo.add(distData);
 
             log.info("✅ Retrieved distribution info for {}.{}", schemaName, tableName);
 
-            return result;
+            // Return JSON-formatted results for table rendering in frontend
+            String message = String.format("Distribution information for %s.%s:", schemaName, tableName);
+            return JsonResponseFormatter.formatWithMessage(message, distributionInfo);
 
         } catch (Exception e) {
             log.error("❌ Failed to get distribution info for {}.{}", schemaName, tableName, e);
