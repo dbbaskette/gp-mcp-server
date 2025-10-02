@@ -475,11 +475,12 @@ public class QueryTools {
             // Execute sample query
             // Note: Using direct string interpolation for LIMIT instead of ? parameter
             // because some JDBC drivers have issues with parameterized LIMIT clauses
+            // Note: Not using quoteIdentifier for Greenplum compatibility
             String sql = String.format(
                 "SELECT %s FROM %s.%s LIMIT %d",
                 columnList,
-                quoteIdentifier(schemaName),
-                quoteIdentifier(tableName),
+                schemaName,
+                tableName,
                 sampleSizeValue
             );
 
@@ -488,6 +489,15 @@ public class QueryTools {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql);
 
             log.debug("Query returned {} rows", rows.size());
+
+            // Additional debugging - try a simple count query
+            try {
+                String countSql = String.format("SELECT COUNT(*) FROM %s.%s", schemaName, tableName);
+                Integer count = jdbcTemplate.queryForObject(countSql, Integer.class);
+                log.debug("Table {}.{} has {} total rows according to COUNT(*)", schemaName, tableName, count);
+            } catch (Exception e) {
+                log.warn("Could not get row count: {}", e.getMessage());
+            }
 
             // Apply redaction
             List<Map<String, Object>> redactedRows = applyRedaction(rows, fullTableName);
