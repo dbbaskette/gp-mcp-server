@@ -473,14 +473,21 @@ public class QueryTools {
             }
 
             // Execute sample query
+            // Note: Using direct string interpolation for LIMIT instead of ? parameter
+            // because some JDBC drivers have issues with parameterized LIMIT clauses
             String sql = String.format(
-                "SELECT %s FROM %s.%s LIMIT ?",
+                "SELECT %s FROM %s.%s LIMIT %d",
                 columnList,
                 quoteIdentifier(schemaName),
-                quoteIdentifier(tableName)
+                quoteIdentifier(tableName),
+                sampleSizeValue
             );
 
-            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, sampleSizeValue);
+            log.debug("Executing SQL: {}", sql);
+
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql);
+
+            log.debug("Query returned {} rows", rows.size());
 
             // Apply redaction
             List<Map<String, Object>> redactedRows = applyRedaction(rows, fullTableName);
