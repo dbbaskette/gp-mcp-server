@@ -45,14 +45,21 @@ public class SqlValidator {
         List<String> warnings = new ArrayList<>();
 
         try {
-            // Check for multi-statement queries
-            if (MULTI_STATEMENT_PATTERN.matcher(sqlTemplate).find()) {
+            // Strip trailing semicolons (common LLM behavior)
+            String cleanedSql = sqlTemplate.trim();
+            if (cleanedSql.endsWith(";")) {
+                cleanedSql = cleanedSql.substring(0, cleanedSql.length() - 1).trim();
+                log.debug("Stripped trailing semicolon from SQL");
+            }
+
+            // Check for multi-statement queries (after removing trailing semicolon)
+            if (MULTI_STATEMENT_PATTERN.matcher(cleanedSql).find()) {
                 errors.add("Multi-statement queries are not allowed");
                 return new ValidationResult(false, errors, warnings);
             }
 
             // Parse SQL
-            Statement statement = CCJSqlParserUtil.parse(sqlTemplate);
+            Statement statement = CCJSqlParserUtil.parse(cleanedSql);
             
             // Ensure it's a SELECT statement
             if (!(statement instanceof Select)) {
