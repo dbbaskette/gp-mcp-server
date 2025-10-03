@@ -41,8 +41,7 @@ public class SecurityConfig {
                 // Public endpoints
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/admin/**").permitAll()  // Allow admin endpoints (key generation)
-                .requestMatchers("/mcp").authenticated()  // MCP endpoint requires API key auth
-                .requestMatchers("/mcp/**").authenticated()  // MCP sub-paths require API key auth
+                .requestMatchers("/mcp", "/mcp/**").permitAll()  // MCP endpoints - auth handled by API key filter
                 // All other endpoints require authentication
                 .anyRequest().authenticated()
             );
