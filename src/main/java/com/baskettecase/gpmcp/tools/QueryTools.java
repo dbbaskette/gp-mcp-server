@@ -78,6 +78,12 @@ public class QueryTools {
             required = false
         ) Map<String, Object> params
     ) {
+        log.info("🔧 TOOL CALLED: gp.previewQuery");
+        log.info("   📊 Parameters:");
+        log.info("      - databaseName: {}", databaseName);
+        log.info("      - sqlTemplate: {}", sqlTemplate);
+        log.info("      - params: {}", params);
+
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             // Get JdbcTemplate for the specified database
@@ -186,6 +192,14 @@ public class QueryTools {
             required = false
         ) Boolean stream
     ) {
+        log.info("🔧 TOOL CALLED: gp.runQuery");
+        log.info("   📊 Parameters:");
+        log.info("      - databaseName: {}", databaseName);
+        log.info("      - sqlTemplate: {}", sqlTemplate);
+        log.info("      - params: {}", params);
+        log.info("      - maxRows: {}", maxRows);
+        log.info("      - stream: {}", stream);
+
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             queryCounter.increment();

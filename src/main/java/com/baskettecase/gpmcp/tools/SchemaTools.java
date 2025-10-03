@@ -72,6 +72,12 @@ public class SchemaTools {
             required = false
         ) Integer offset
     ) {
+        log.info("🔧 TOOL CALLED: gp.listSchemas");
+        log.info("   📊 Parameters:");
+        log.info("      - databaseName: {}", databaseName);
+        log.info("      - limit: {}", limit);
+        log.info("      - offset: {}", offset);
+
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             schemaQueryCounter.increment();
