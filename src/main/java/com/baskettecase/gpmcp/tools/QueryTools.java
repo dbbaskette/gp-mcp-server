@@ -588,6 +588,14 @@ public class QueryTools {
             String message = String.format("Sample data from %s.%s (%d rows):", schemaName, tableName, redactedRows.size());
             return JsonResponseFormatter.formatWithMessage(message, redactedRows);
 
+        } catch (DataAccessException e) {
+            log.error("❌ Failed to get sample data from {}.{}", schemaName, tableName, e);
+
+            // Try to provide helpful error messages with fuzzy matching suggestions
+            String errorMessage = e.getMessage();
+            String enhancedError = enhanceErrorMessage(errorMessage, databaseName);
+
+            throw new RuntimeException(enhancedError, e);
         } catch (Exception e) {
             log.error("❌ Failed to get sample data from {}.{}", schemaName, tableName, e);
             throw new RuntimeException("Failed to get sample data: " + e.getMessage(), e);
