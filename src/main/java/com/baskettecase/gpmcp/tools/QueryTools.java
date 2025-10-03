@@ -209,65 +209,56 @@ public class QueryTools {
         try {
             queryCounter.increment();
 
-            // Get JdbcTemplate for the specified database
-            // Get API key from request context
-            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+            return executeWithFuzzyMatching(() -> {
+                // Get JdbcTemplate for the specified database
+                // Get API key from request context
+                ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
 
-            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+                JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
 
-            int maxRowsValue = maxRows != null ? Math.min(maxRows, policyService.getMaxRows()) : 1000;
-            boolean streamValue = stream != null ? stream : true;
+                int maxRowsValue = maxRows != null ? Math.min(maxRows, policyService.getMaxRows()) : 1000;
+                boolean streamValue = stream != null ? stream : true;
 
-            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
-            log.debug("Executing query on database '{}': {} with maxRows={}, stream={}",
-                dbKey, sqlTemplate, maxRowsValue, streamValue);
+                String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+                log.debug("Executing query on database '{}': {} with maxRows={}, stream={}",
+                    dbKey, sqlTemplate, maxRowsValue, streamValue);
 
-            // Validate SQL
-            SqlValidator.ValidationResult validation = sqlValidator.validate(sqlTemplate);
-            if (!validation.isValid()) {
-                throw new IllegalArgumentException("Query validation failed: " + validation.getErrorMessage());
-            }
+                // Validate SQL
+                SqlValidator.ValidationResult validation = sqlValidator.validate(sqlTemplate);
+                if (!validation.isValid()) {
+                    throw new IllegalArgumentException("Query validation failed: " + validation.getErrorMessage());
+                }
 
-            // Add LIMIT clause if not present
-            String finalSql = addLimitClause(sqlTemplate, maxRowsValue);
+                // Add LIMIT clause if not present
+                String finalSql = addLimitClause(sqlTemplate, maxRowsValue);
 
-            // Execute query
-            List<Map<String, Object>> rows = new ArrayList<>();
-            int actualRowCount = 0;
+                // Execute query
+                List<Map<String, Object>> rows = new ArrayList<>();
+                int actualRowCount = 0;
 
-            if (streamValue) {
-                // Stream results
-                actualRowCount = executeStreamingQuery(jdbcTemplate, finalSql, params, rows, maxRowsValue);
-            } else {
-                // Execute normally
-                rows = jdbcTemplate.queryForList(finalSql,
-                        params != null ? params.values().toArray() : new Object[0]);
-                actualRowCount = rows.size();
-            }
+                if (streamValue) {
+                    // Stream results
+                    actualRowCount = executeStreamingQuery(jdbcTemplate, finalSql, params, rows, maxRowsValue);
+                } else {
+                    // Execute normally
+                    rows = jdbcTemplate.queryForList(finalSql,
+                            params != null ? params.values().toArray() : new Object[0]);
+                    actualRowCount = rows.size();
+                }
 
-            // Apply redaction
-            List<Map<String, Object>> redactedRows = applyRedaction(rows, sqlTemplate);
+                // Apply redaction
+                List<Map<String, Object>> redactedRows = applyRedaction(rows, sqlTemplate);
 
-            log.info("✅ Query executed: {} rows returned (max: {})", actualRowCount, maxRowsValue);
+                log.info("✅ Query executed: {} rows returned (max: {})", actualRowCount, maxRowsValue);
 
-            // Return JSON-formatted results for table rendering in frontend
-            if (redactedRows.isEmpty()) {
-                return "Query executed successfully. No rows returned.";
-            }
+                // Return JSON-formatted results for table rendering in frontend
+                if (redactedRows.isEmpty()) {
+                    return "Query executed successfully. No rows returned.";
+                }
 
-            return JsonResponseFormatter.formatWithRowCount(actualRowCount, redactedRows);
+                return JsonResponseFormatter.formatWithRowCount(actualRowCount, redactedRows);
+            }, databaseName, "Query execution failed");
 
-        } catch (DataAccessException e) {
-            log.error("❌ Query execution failed", e);
-
-            // Try to provide helpful error messages with fuzzy matching suggestions
-            String errorMessage = e.getMessage();
-            String enhancedError = enhanceErrorMessage(errorMessage, databaseName);
-
-            throw new RuntimeException(enhancedError, e);
-        } catch (Exception e) {
-            log.error("❌ Query execution failed", e);
-            throw new RuntimeException("Query execution failed: " + e.getMessage(), e);
         } finally {
             sample.stop(queryTimer);
         }
@@ -589,12 +580,9 @@ public class QueryTools {
             return JsonResponseFormatter.formatWithMessage(message, redactedRows);
 
         } catch (DataAccessException e) {
-            log.error("❌ Failed to get sample data from {}.{}", schemaName, tableName, e);
-
-            // Try to provide helpful error messages with fuzzy matching suggestions
             String errorMessage = e.getMessage();
             String enhancedError = enhanceErrorMessage(errorMessage, databaseName);
-
+            log.error("❌ Failed to get sample data from {}.{}: {}", schemaName, tableName, enhancedError);
             throw new RuntimeException(enhancedError, e);
         } catch (Exception e) {
             log.error("❌ Failed to get sample data from {}.{}", schemaName, tableName, e);
@@ -664,6 +652,47 @@ public class QueryTools {
     private Long getEstimatedRows(List<Map<String, Object>> planRows) {
         // Extract estimated rows from query plan
         return planRows.isEmpty() ? 0L : 100L; // Placeholder
+    }
+
+    /**
+     * Execute a database operation with automatic fuzzy matching error enhancement
+     *
+     * This wrapper handles DataAccessException and enhances error messages with
+     * "Did you mean?" suggestions for misspelled table/schema/column names.
+     *
+     * @param operation The database operation to execute
+     * @param databaseName The database name (for error context)
+     * @param errorContext Description of the operation for error messages
+     * @return The result from the operation
+     * @throws RuntimeException with enhanced error message if operation fails
+     */
+    private <T> T executeWithFuzzyMatching(
+        DatabaseOperation<T> operation,
+        String databaseName,
+        String errorContext
+    ) {
+        try {
+            return operation.execute();
+        } catch (DataAccessException e) {
+            log.error("❌ {}", errorContext, e);
+
+            // Enhance error message with fuzzy matching suggestions
+            String errorMessage = e.getMessage();
+            String enhancedError = enhanceErrorMessage(errorMessage, databaseName);
+
+            throw new RuntimeException(enhancedError, e);
+        } catch (Exception e) {
+            log.error("❌ {}", errorContext, e);
+            throw new RuntimeException(errorContext + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Functional interface for database operations
+     */
+    @FunctionalInterface
+    private interface DatabaseOperation<T> {
+        T execute() throws Exception;
     }
 
     /**
