@@ -4,6 +4,7 @@ import com.baskettecase.gpmcp.db.DatabaseConnectionManager;
 import com.baskettecase.gpmcp.policy.PolicyService;
 import com.baskettecase.gpmcp.security.ApiKey;
 import com.baskettecase.gpmcp.security.ApiKeyContext;
+import com.baskettecase.gpmcp.util.FuzzyMatcher;
 import com.baskettecase.gpmcp.util.JsonResponseFormatter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -480,7 +481,36 @@ public class SchemaTools {
 
             // Return JSON-formatted results for table rendering in frontend
             if (columns.isEmpty()) {
-                return String.format("No columns found in table %s.%s", schemaName, tableName);
+                // Check if table actually exists or if it's a typo
+                String tableExistsSql = """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_schema = ? AND table_name = ?
+                    """;
+                Integer tableCount = jdbcTemplate.queryForObject(tableExistsSql, Integer.class, schemaName, tableName);
+
+                if (tableCount == null || tableCount == 0) {
+                    // Table doesn't exist - apply fuzzy matching
+                    String allTablesSql = """
+                        SELECT table_name
+                        FROM information_schema.tables
+                        WHERE table_schema = ?
+                        """;
+                    List<String> allTables = jdbcTemplate.queryForList(allTablesSql, String.class, schemaName);
+
+                    String closestMatch = FuzzyMatcher.findClosestMatch(tableName, allTables);
+                    if (closestMatch != null) {
+                        throw new RuntimeException(String.format(
+                            "Table '%s.%s' does not exist.\n\n💡 Did you mean '%s.%s'?",
+                            schemaName, tableName, schemaName, closestMatch
+                        ));
+                    } else {
+                        throw new RuntimeException(String.format("Table '%s.%s' does not exist", schemaName, tableName));
+                    }
+                } else {
+                    // Table exists but has no columns (unusual but possible)
+                    return String.format("Table %s.%s exists but has no columns", schemaName, tableName);
+                }
             }
 
             String message = String.format("Schema for table %s.%s (%d columns):", schemaName, tableName, columns.size());
