@@ -33,8 +33,7 @@ public class ApiKeyRepository {
         public ApiKey mapRow(ResultSet rs, int rowNum) throws SQLException {
             ApiKey key = new ApiKey();
             key.setId(rs.getString("id"));
-            key.setKeyPrefix(rs.getString("key_prefix"));
-            key.setKeyHash(rs.getString("key_hash"));
+            key.setSecretHash(rs.getString("secret_hash"));
             key.setEnvironment(rs.getString("environment"));
             key.setDescription(rs.getString("description"));
             key.setActive(rs.getBoolean("active"));
@@ -76,17 +75,16 @@ public class ApiKeyRepository {
 
         String sql = """
             INSERT INTO api_keys (
-                id, key_prefix, key_hash, environment, description,
+                id, secret_hash, environment, description,
                 active, created_by,
                 encrypted_username, encrypted_password,
                 created_at, last_used_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
         jdbcTemplate.update(sql,
             apiKey.getId(),
-            apiKey.getKeyPrefix(),
-            apiKey.getKeyHash(),
+            apiKey.getSecretHash(),
             apiKey.getEnvironment(),
             apiKey.getDescription(),
             apiKey.isActive(),
@@ -102,15 +100,16 @@ public class ApiKeyRepository {
     }
 
     /**
-     * Find API key by hash
+     * Find API key by ID (the public part before the dot)
+     * Example: For "gpmcp_live_a1b2c3d4.secret", this finds by "gpmcp_live_a1b2c3d4"
      */
-    public Optional<ApiKey> findByKeyHash(String keyHash) {
+    public Optional<ApiKey> findById(String id) {
         String sql = """
             SELECT * FROM api_keys
-            WHERE key_hash = ? AND active = true
+            WHERE id = ? AND active = true
             """;
 
-        List<ApiKey> results = jdbcTemplate.query(sql, ROW_MAPPER, keyHash);
+        List<ApiKey> results = jdbcTemplate.query(sql, ROW_MAPPER, id);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
@@ -201,7 +200,7 @@ public class ApiKeyRepository {
             String sql = """
                 SELECT COUNT(*) FROM information_schema.columns
                 WHERE table_name = 'api_keys'
-                AND column_name IN ('target_host', 'default_database', 'allowed_databases', 'allowed_schemas')
+                AND column_name IN ('target_host', 'default_database', 'allowed_databases', 'allowed_schemas', 'key_prefix', 'key_hash')
                 """;
             Integer count = jdbcTemplate.queryForObject(sql, Integer.class);
             return count != null && count > 0;
@@ -216,7 +215,9 @@ public class ApiKeyRepository {
             "target_host",
             "default_database",
             "allowed_databases",
-            "allowed_schemas"
+            "allowed_schemas",
+            "key_prefix",
+            "key_hash"
         };
 
         for (String column : columnsToDrop) {
@@ -229,15 +230,31 @@ public class ApiKeyRepository {
             }
         }
 
+        // Add new secret_hash column if it doesn't exist
+        try {
+            String checkColumnSql = """
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_name = 'api_keys' AND column_name = 'secret_hash'
+                """;
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumnSql, Integer.class);
+
+            if (columnExists == null || columnExists == 0) {
+                String addColumnSql = "ALTER TABLE api_keys ADD COLUMN secret_hash VARCHAR(64)";
+                jdbcTemplate.execute(addColumnSql);
+                log.info("  ✅ Added column: secret_hash");
+            }
+        } catch (Exception e) {
+            log.warn("  ⚠️ Could not add column secret_hash: {}", e.getMessage());
+        }
+
         log.info("✅ Schema migration completed");
     }
 
     private void createNewTable() {
         String createTableSql = """
             CREATE TABLE api_keys (
-                id VARCHAR(36) PRIMARY KEY,
-                key_prefix VARCHAR(8) NOT NULL,
-                key_hash VARCHAR(64) NOT NULL,
+                id VARCHAR(50) PRIMARY KEY,
+                secret_hash VARCHAR(64) NOT NULL,
                 environment VARCHAR(10) NOT NULL,
                 description TEXT,
                 active BOOLEAN DEFAULT true,
@@ -254,9 +271,19 @@ public class ApiKeyRepository {
     }
 
     private void ensureIndex() {
+        // Drop old index if it exists
+        try {
+            String dropIndexSql = "DROP INDEX IF EXISTS api_keys_key_hash_idx";
+            jdbcTemplate.execute(dropIndexSql);
+            log.debug("Dropped old index api_keys_key_hash_idx if it existed");
+        } catch (Exception e) {
+            log.debug("Could not drop old index: {}", e.getMessage());
+        }
+
+        // Create new index on secret_hash
         String checkIndexSql = """
             SELECT COUNT(*) FROM pg_indexes
-            WHERE indexname = 'api_keys_key_hash_idx'
+            WHERE indexname = 'api_keys_secret_hash_idx'
             """;
 
         Integer indexCount = jdbcTemplate.queryForObject(checkIndexSql, Integer.class);
@@ -264,13 +291,13 @@ public class ApiKeyRepository {
         if (indexCount == null || indexCount == 0) {
             // Greenplum requires UNIQUE index to include distribution key column (id)
             String createIndexSql = """
-                CREATE UNIQUE INDEX api_keys_key_hash_idx
-                ON api_keys(key_hash, id)
+                CREATE UNIQUE INDEX api_keys_secret_hash_idx
+                ON api_keys(secret_hash, id)
                 """;
             jdbcTemplate.execute(createIndexSql);
-            log.info("✅ Created unique index on api_keys(key_hash, id)");
+            log.info("✅ Created unique index on api_keys(secret_hash, id)");
         } else {
-            log.debug("Index api_keys_key_hash_idx already exists");
+            log.debug("Index api_keys_secret_hash_idx already exists");
         }
     }
 }

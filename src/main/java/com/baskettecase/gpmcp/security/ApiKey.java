@@ -7,14 +7,22 @@ import java.time.Instant;
  * API Key Entity
  *
  * Represents an API key for authenticating MCP client requests.
- * Keys follow the format: gpmcp_{env}_{token}
+ * Keys follow the Spring AI MCP format: {id}.{secret}
+ *
+ * Format: gpmcp_{env}_{randomId}.{secret}
+ * Example: gpmcp_live_a1b2c3d4.xyz789...
  */
 @Data
 public class ApiKey {
 
+    // Public identifier (used for lookup)
+    // Format: gpmcp_{env}_{randomId}
+    // Example: "gpmcp_live_a1b2c3d4"
     private String id;
-    private String keyPrefix;      // First 8 chars of token for display (e.g., "a1b2c3d4")
-    private String keyHash;         // SHA-256 hash of full key for secure storage
+
+    // SHA-256 hash of the secret part (never store plaintext secret)
+    private String secretHash;
+
     private String environment;     // "live" or "test"
     private String description;     // User-provided description
     private boolean active;
@@ -32,9 +40,10 @@ public class ApiKey {
 
     /**
      * Get display-friendly key representation
+     * Shows ID + masked secret
      */
     public String getDisplayKey() {
-        return String.format("gpmcp_%s_%s***", environment, keyPrefix);
+        return id + ".***";
     }
 
     /**

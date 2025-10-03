@@ -14,6 +14,9 @@ spring.ai.mcp.server:
 
 ## MCP Inspector Configuration
 
+**API Key Format:** `{id}.{secret}`
+**Example:** `gpmcp_live_ABC123.xyz789secretpart`
+
 **Add to MCP Inspector config:**
 
 ```json
@@ -25,7 +28,7 @@ spring.ai.mcp.server:
         "type": "streamable-http"
       },
       "headers": {
-        "Authorization": "Bearer gpmcp_live_YOUR_API_KEY_HERE"
+        "Authorization": "Bearer gpmcp_live_ABC123.xyz789secretpart"
       }
     }
   }
@@ -42,7 +45,7 @@ spring.ai.mcp.server:
         "type": "streamable-http"
       },
       "headers": {
-        "X-API-Key": "gpmcp_live_YOUR_API_KEY_HERE"
+        "X-API-Key": "gpmcp_live_ABC123.xyz789secretpart"
       }
     }
   }

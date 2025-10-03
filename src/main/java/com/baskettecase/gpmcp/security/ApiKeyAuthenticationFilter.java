@@ -19,8 +19,9 @@ import java.util.Optional;
 /**
  * API Key Authentication Filter
  *
- * Validates API keys from the Authorization header.
- * Expected format: "Bearer gpmcp_live_xxxxx" or "gpmcp_live_xxxxx"
+ * Validates API keys from Authorization or X-API-Key headers.
+ * Expected format: "Bearer {id}.{secret}" or "{id}.{secret}"
+ * Example: "Bearer gpmcp_live_a1b2c3d4.xyz789..." or "gpmcp_live_a1b2c3d4.xyz789..."
  */
 @Slf4j
 @Component
@@ -92,13 +93,14 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
             "{\"error\":\"Unauthorized\",\"message\":\"Valid API key required. " +
-            "Provide in Authorization header as 'Bearer gpmcp_xxx' or 'gpmcp_xxx'\"}"
+            "Provide in Authorization header as 'Bearer {id}.{secret}' or in X-API-Key header as '{id}.{secret}'\"}"
         );
     }
 
     /**
      * Extract API key from Authorization header
-     * Supports: "Bearer gpmcp_xxx" or "gpmcp_xxx"
+     * Supports: "Bearer {id}.{secret}" or "{id}.{secret}"
+     * Example: "Bearer gpmcp_live_a1b2c3d4.xyz789..." or "gpmcp_live_a1b2c3d4.xyz789..."
      */
     private String extractApiKey(String authHeader) {
         if (authHeader == null || authHeader.trim().isEmpty()) {
@@ -112,8 +114,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
             authHeader = authHeader.substring(7).trim();
         }
 
-        // Validate format
-        if (authHeader.startsWith("gpmcp_")) {
+        // Validate format: must start with gpmcp_ and contain a dot separator
+        if (authHeader.startsWith("gpmcp_") && authHeader.contains(".")) {
             return authHeader;
         }
 

@@ -60,6 +60,9 @@ public class ApiKeyService {
     /**
      * Generate a new API key with Greenplum user credentials
      *
+     * Format: {id}.{secret}
+     * Example: gpmcp_live_a1b2c3d4.xyz789abc...
+     *
      * @param environment "live" or "test"
      * @param description User-provided description
      * @param createdBy Username or identifier of creator
@@ -92,21 +95,27 @@ public class ApiKeyService {
         // TODO: Verify credentials by testing connection to Greenplum
         // This will be implemented after DatabaseConnectionManager is updated
 
-        // Generate random token (32 characters)
-        byte[] randomBytes = new byte[24]; // 24 bytes = 32 base64 chars
-        secureRandom.nextBytes(randomBytes);
-        String token = Base64.getUrlEncoder()
+        // Generate ID part: gpmcp_{env}_{randomId}
+        byte[] idBytes = new byte[6]; // 6 bytes = 8 base64 chars
+        secureRandom.nextBytes(idBytes);
+        String randomId = Base64.getUrlEncoder()
             .withoutPadding()
-            .encodeToString(randomBytes);
+            .encodeToString(idBytes);
 
-        // Build full key: gpmcp_{env}_{token}
-        String fullKey = String.format("gpmcp_%s_%s", environment, token);
+        String id = String.format("gpmcp_%s_%s", environment, randomId);
 
-        // Hash the full key for storage
-        String keyHash = hashKey(fullKey);
+        // Generate secret part (24 bytes = 32 base64 chars)
+        byte[] secretBytes = new byte[24];
+        secureRandom.nextBytes(secretBytes);
+        String secret = Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(secretBytes);
 
-        // Extract prefix (first 8 chars of token)
-        String keyPrefix = token.substring(0, Math.min(8, token.length()));
+        // Build full key: {id}.{secret}
+        String fullKey = id + "." + secret;
+
+        // Hash only the secret part for storage (SHA-256)
+        String secretHash = hashKey(secret);
 
         // Encrypt credentials
         String encryptedUsername = encryptionService.encrypt(username);
@@ -114,8 +123,8 @@ public class ApiKeyService {
 
         // Create API key entity
         ApiKey apiKey = new ApiKey();
-        apiKey.setKeyPrefix(keyPrefix);
-        apiKey.setKeyHash(keyHash);
+        apiKey.setId(id);
+        apiKey.setSecretHash(secretHash);
         apiKey.setEnvironment(environment);
         apiKey.setDescription(description);
         apiKey.setActive(true);
@@ -141,26 +150,49 @@ public class ApiKeyService {
     /**
      * Validate an API key
      *
+     * Format: {id}.{secret}
+     * Example: gpmcp_live_a1b2c3d4.xyz789abc...
+     *
      * @param key The full API key
      * @return Optional containing the ApiKey if valid
      */
     public Optional<ApiKey> validateKey(String key) {
-        if (key == null || !key.startsWith("gpmcp_")) {
+        if (key == null || key.trim().isEmpty()) {
             return Optional.empty();
         }
 
-        // Hash the provided key
-        String keyHash = hashKey(key);
+        // Parse the key: {id}.{secret}
+        String[] parts = key.split("\\.", 2);
+        if (parts.length != 2) {
+            log.warn("⚠️ Invalid API key format (missing dot separator)");
+            return Optional.empty();
+        }
 
-        // Look up in database
-        Optional<ApiKey> apiKeyOpt = repository.findByKeyHash(keyHash);
+        String id = parts[0];
+        String secret = parts[1];
+
+        // Validate ID format
+        if (!id.startsWith("gpmcp_")) {
+            log.warn("⚠️ Invalid API key ID format");
+            return Optional.empty();
+        }
+
+        // Look up by ID
+        Optional<ApiKey> apiKeyOpt = repository.findById(id);
 
         if (apiKeyOpt.isEmpty()) {
-            log.warn("⚠️ Invalid API key attempted");
+            log.warn("⚠️ API key not found: {}", id);
             return Optional.empty();
         }
 
         ApiKey apiKey = apiKeyOpt.get();
+
+        // Hash the provided secret and compare
+        String providedSecretHash = hashKey(secret);
+        if (!providedSecretHash.equals(apiKey.getSecretHash())) {
+            log.warn("⚠️ Invalid secret for API key: {}", apiKey.getDisplayKey());
+            return Optional.empty();
+        }
 
         // Check if valid
         if (!apiKey.isValid()) {

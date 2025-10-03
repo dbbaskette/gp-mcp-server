@@ -160,6 +160,9 @@ EOF
 
 ### 🔑 Generate API Keys
 
+**Format:** API keys follow the Spring AI MCP standard: `{id}.{secret}`
+**Example:** `gpmcp_live_ABC123.xyz789secretpart`
+
 **Via Web UI:**
 ```bash
 open http://localhost:8082/admin/api-keys
@@ -181,8 +184,8 @@ Response:
 ```json
 {
   "success": true,
-  "apiKey": "gpmcp_live_a1b2c3d4e5f6...",
-  "displayKey": "gpmcp_live_a1b2***",
+  "apiKey": "gpmcp_live_ABC123.xyz789secretpart",
+  "displayKey": "gpmcp_live_ABC123.***",
   "message": "API key generated successfully"
 }
 ```

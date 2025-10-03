@@ -33,6 +33,8 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())  // Disable CSRF - using API keys, not sessions
+            .httpBasic(basic -> basic.disable())  // Disable HTTP Basic - using API keys
+            .formLogin(form -> form.disable())  // Disable form login
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))  // No sessions
             .authorizeHttpRequests(authz -> authz
