@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GP-MCP Server - API Key Management</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f7fa;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #34495e;
+            font-weight: 500;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #229954;
+        }
+
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+            margin-left: 10px;
+        }
+
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+
+        .alert {
+            padding: 12px 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+
+        .api-key-display {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 2px solid #3498db;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            word-break: break-all;
+        }
+
+        .api-key-display strong {
+            display: block;
+            margin-bottom: 10px;
+            font-family: sans-serif;
+            color: #e74c3c;
+        }
+
+        .api-key-value {
+            font-size: 14px;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            user-select: all;
+        }
+
+        #loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 600px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 API Key Management</h1>
+        <p class="subtitle">Generate an API key for your MCP client</p>
+
+        <div id="message"></div>
+        <div id="loading"><div class="spinner"></div></div>
+
+        <form id="apiKeyForm">
+            <div class="form-group">
+                <label for="targetHost">Database Host *</label>
+                <input type="text" id="targetHost" required placeholder="greenplum.example.com:5432">
+                <div class="help-text">Format: hostname:port (default port: 5432)</div>
+            </div>
+
+            <div class="two-column">
+                <div class="form-group">
+                    <label for="username">Username *</label>
+                    <input type="text" id="username" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password *</label>
+                    <input type="password" id="password" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="defaultDatabase">Default Database *</label>
+                <input type="text" id="defaultDatabase" required placeholder="gpadmin">
+                <div class="help-text">Database to connect to by default</div>
+            </div>
+
+            <div class="form-group">
+                <label for="allowedDatabases">Allowed Databases (optional)</label>
+                <input type="text" id="allowedDatabases" placeholder="db1, db2, db3">
+                <div class="help-text">Comma-separated list. Leave empty to allow all databases.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="allowedSchemas">Allowed Schemas (optional)</label>
+                <input type="text" id="allowedSchemas" placeholder="public, analytics, staging">
+                <div class="help-text">Comma-separated list. Leave empty to allow all schemas.</div>
+            </div>
+
+            <div class="two-column">
+                <div class="form-group">
+                    <label for="environment">Environment</label>
+                    <select id="environment">
+                        <option value="live">Live</option>
+                        <option value="test">Test</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="expiresInDays">Expires In (days)</label>
+                    <input type="number" id="expiresInDays" placeholder="Leave empty for no expiration">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="description">Description</label>
+                <textarea id="description" rows="3" placeholder="Purpose of this API key..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <button type="button" class="btn btn-secondary" id="testBtn">Test Connection</button>
+                <button type="submit" class="btn btn-primary">Generate API Key</button>
+            </div>
+        </form>
+
+        <div id="apiKeyResult"></div>
+    </div>
+
+    <script>
+        const form = document.getElementById('apiKeyForm');
+        const testBtn = document.getElementById('testBtn');
+        const message = document.getElementById('message');
+        const loading = document.getElementById('loading');
+        const apiKeyResult = document.getElementById('apiKeyResult');
+
+        function showMessage(text, type) {
+            message.innerHTML = `<div class="alert alert-${type}">${text}</div>`;
+            setTimeout(() => { message.innerHTML = ''; }, 5000);
+        }
+
+        function getFormData() {
+            const allowedDatabases = document.getElementById('allowedDatabases').value
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+
+            const allowedSchemas = document.getElementById('allowedSchemas').value
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+
+            const expiresInDays = document.getElementById('expiresInDays').value;
+
+            return {
+                targetHost: document.getElementById('targetHost').value,
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                defaultDatabase: document.getElementById('defaultDatabase').value,
+                allowedDatabases: allowedDatabases.length > 0 ? allowedDatabases : null,
+                allowedSchemas: allowedSchemas.length > 0 ? allowedSchemas : null,
+                environment: document.getElementById('environment').value,
+                description: document.getElementById('description').value,
+                expiresInDays: expiresInDays ? parseInt(expiresInDays) : null
+            };
+        }
+
+        testBtn.addEventListener('click', async () => {
+            loading.style.display = 'block';
+            message.innerHTML = '';
+
+            const data = getFormData();
+
+            try {
+                const response = await fetch('/admin/api-keys/test-connection', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage(`✅ Connection successful! Server: ${result.serverVersion}`, 'success');
+                } else {
+                    showMessage(`❌ ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ Connection test failed: ${error.message}`, 'error');
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            loading.style.display = 'block';
+            message.innerHTML = '';
+            apiKeyResult.innerHTML = '';
+
+            const data = getFormData();
+
+            try {
+                const response = await fetch('/admin/api-keys/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    apiKeyResult.innerHTML = `
+                        <div class="api-key-display">
+                            <strong>⚠️ SAVE THIS API KEY - IT WILL NOT BE SHOWN AGAIN!</strong>
+                            <div class="api-key-value">${result.apiKey}</div>
+                        </div>
+                    `;
+                    showMessage('✅ API key generated successfully!', 'success');
+                    form.reset();
+                } else {
+                    showMessage(`❌ ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ Failed to generate API key: ${error.message}`, 'error');
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

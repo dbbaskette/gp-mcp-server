@@ -1,11 +1,19 @@
 #!/bin/bash
 
+# Load environment variables from .env if it exists
+if [ -f .env ]; then
+    echo "Loading environment from .env file..."
+    set -a  # automatically export all variables
+    source .env
+    set +a
+fi
+
 # --- Configuration ---
 APP_NAME="Greenplum MCP Server"
 JAR_NAME="gp-mcp-server-0.0.1-SNAPSHOT.jar"
 MAVEN_COMMAND="./mvnw"
-BUILD_COMMAND="clean compile -DskipTests"
-RUN_COMMAND="spring-boot:run"
+BUILD_COMMAND="clean compile"
+RUN_COMMAND="spring-boot:run -DskipTests"
 TARGET_DIR="target"
 
 # --- Colors ---
@@ -20,29 +28,40 @@ NC='\033[0m' # No Color
 print_help() {
     echo -e "${BLUE}Usage: ./run.sh [OPTIONS]${NC}"
     echo -e "${BLUE}Options:${NC}"
-    echo -e "  ${GREEN}-b, --build${NC}    Build the project before running (compile only, skips tests)"
-    echo -e "  ${GREEN}-c, --clean${NC}    Perform a clean build before running (clean, compile, skips tests)"
-    echo -e "  ${GREEN}-t, --test${NC}     Run tests before starting"
-    echo -e "  ${GREEN}-h, --help${NC}     Display this help message"
+    echo -e "  ${GREEN}-b, --build${NC}       Build the project before running (compile only, skips tests)"
+    echo -e "  ${GREEN}-c, --clean${NC}       Perform a clean build before running (clean, compile, skips tests)"
+    echo -e "  ${GREEN}-t, --test${NC}        Run tests before starting"
+    echo -e "  ${GREEN}-s, --skip-tests${NC}  Skip tests explicitly (default behavior)"
+    echo -e "  ${GREEN}-h, --help${NC}        Display this help message"
     echo ""
     echo -e "${BLUE}Examples:${NC}"
-    echo -e "  ./run.sh             # Run without building"
-    echo -e "  ./run.sh -b          # Build and run"
-    echo -e "  ./run.sh --clean     # Clean build and run"
-    echo -e "  ./run.sh -t          # Run tests and start"
+    echo -e "  ./run.sh                # Run without building (skips tests)"
+    echo -e "  ./run.sh -b             # Build and run (skips tests)"
+    echo -e "  ./run.sh --clean        # Clean build and run (skips tests)"
+    echo -e "  ./run.sh -t             # Run tests and start"
+    echo -e "  ./run.sh -s             # Explicitly skip tests (same as default)"
     echo ""
-    echo -e "${YELLOW}Environment Variables:${NC}"
+    echo -e "${YELLOW}Environment Variables (loaded from .env if present):${NC}"
     echo -e "  ${PURPLE}DB_URL${NC}                    Database connection URL"
     echo -e "  ${PURPLE}DB_USER${NC}                   Database username"
     echo -e "  ${PURPLE}DB_PASSWORD${NC}               Database password"
+    echo -e "  ${PURPLE}GP_MCP_ENCRYPTION_KEY${NC}     Encryption key for API key credentials (REQUIRED)"
     echo -e "  ${PURPLE}DB_SEARCH_PATH${NC}            Default search path"
     echo -e "  ${PURPLE}DB_STATEMENT_TIMEOUT_MS${NC}   Query timeout in milliseconds"
     echo -e "  ${PURPLE}OTEL_EXPORTER_OTLP_ENDPOINT${NC} OpenTelemetry endpoint"
     echo ""
-    echo -e "${YELLOW}Note: Ensure database connection is configured via environment variables.${NC}"
+    echo -e "${YELLOW}Note: Create a .env file with required variables or set them in your environment.${NC}"
+    echo -e "${YELLOW}Generate encryption key with: openssl rand -base64 32${NC}"
 }
 
 check_database_config() {
+    if [ -z "$GP_MCP_ENCRYPTION_KEY" ]; then
+        echo -e "${RED}ERROR: GP_MCP_ENCRYPTION_KEY not set!${NC}"
+        echo -e "${YELLOW}This is required for API key credential encryption.${NC}"
+        echo -e "${YELLOW}Generate one with: openssl rand -base64 32${NC}"
+        echo -e "${YELLOW}Then add to .env file: export GP_MCP_ENCRYPTION_KEY=<your-key>${NC}"
+        exit 1
+    fi
     if [ -z "$DB_URL" ]; then
         echo -e "${YELLOW}WARNING: DB_URL not set, using default: jdbc:postgresql://localhost:5432/gpdb${NC}"
     fi
@@ -70,6 +89,7 @@ display_config() {
 BUILD_NEEDED=0
 CLEAN_BUILD_NEEDED=0
 TEST_NEEDED=0
+SKIP_TESTS=1  # Default to skipping tests
 
 # Parse arguments
 for arg in "$@"; do
@@ -85,7 +105,12 @@ for arg in "$@"; do
             ;;
         -t|--test)
             TEST_NEEDED=1
-            BUILD_NEEDED=1 # Test implies build
+            SKIP_TESTS=0    # Enable tests
+            BUILD_NEEDED=1  # Test implies build
+            shift
+            ;;
+        -s|--skip-tests)
+            SKIP_TESTS=1    # Explicitly skip tests
             shift
             ;;
         -h|--help)
@@ -106,11 +131,19 @@ display_config
 # Perform build if requested
 if [ $CLEAN_BUILD_NEEDED -eq 1 ]; then
     echo -e "${YELLOW}Performing clean build...${NC}"
-    $MAVEN_COMMAND clean $BUILD_COMMAND || { echo -e "${RED}Clean build failed!${NC}"; exit 1; }
+    if [ $SKIP_TESTS -eq 1 ]; then
+        $MAVEN_COMMAND clean $BUILD_COMMAND -DskipTests || { echo -e "${RED}Clean build failed!${NC}"; exit 1; }
+    else
+        $MAVEN_COMMAND clean $BUILD_COMMAND || { echo -e "${RED}Clean build failed!${NC}"; exit 1; }
+    fi
     echo -e "${GREEN}Clean build successful.${NC}"
 elif [ $BUILD_NEEDED -eq 1 ]; then
     echo -e "${YELLOW}Performing build...${NC}"
-    $MAVEN_COMMAND $BUILD_COMMAND || { echo -e "${RED}Build failed!${NC}"; exit 1; }
+    if [ $SKIP_TESTS -eq 1 ]; then
+        $MAVEN_COMMAND $BUILD_COMMAND -DskipTests || { echo -e "${RED}Build failed!${NC}"; exit 1; }
+    else
+        $MAVEN_COMMAND $BUILD_COMMAND || { echo -e "${RED}Build failed!${NC}"; exit 1; }
+    fi
     echo -e "${GREEN}Build successful.${NC}"
 fi
 

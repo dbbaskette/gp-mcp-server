@@ -1,6 +1,9 @@
 package com.baskettecase.gpmcp.tools;
 
+import com.baskettecase.gpmcp.db.DatabaseConnectionManager;
 import com.baskettecase.gpmcp.policy.PolicyService;
+import com.baskettecase.gpmcp.security.ApiKey;
+import com.baskettecase.gpmcp.security.ApiKeyContext;
 import com.baskettecase.gpmcp.sql.SqlValidator;
 import com.baskettecase.gpmcp.util.JsonResponseFormatter;
 import io.micrometer.core.instrument.Counter;
@@ -32,7 +35,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @RequiredArgsConstructor
 public class QueryTools {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final DatabaseConnectionManager connectionManager;
     private final PolicyService policyService;
     private final SqlValidator sqlValidator;
     private final MeterRegistry meterRegistry;
@@ -63,6 +66,10 @@ public class QueryTools {
     )
     public String previewQuery(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "SQL SELECT template with named parameters (e.g., 'SELECT * FROM users WHERE id = :id')",
             required = true
         ) String sqlTemplate,
@@ -73,7 +80,14 @@ public class QueryTools {
     ) {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
-            log.debug("Previewing query: {}", sqlTemplate);
+            // Get JdbcTemplate for the specified database
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Previewing query on database '{}': {}", dbKey, sqlTemplate);
 
             // Validate SQL syntax and permissions
             SqlValidator.ValidationResult validation = sqlValidator.validate(sqlTemplate);
@@ -152,6 +166,10 @@ public class QueryTools {
     )
     public String runQuery(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "SQL SELECT template with named parameters",
             required = true
         ) String sqlTemplate,
@@ -172,10 +190,18 @@ public class QueryTools {
         try {
             queryCounter.increment();
 
+            // Get JdbcTemplate for the specified database
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
             int maxRowsValue = maxRows != null ? Math.min(maxRows, policyService.getMaxRows()) : 1000;
             boolean streamValue = stream != null ? stream : true;
 
-            log.debug("Executing query: {} with maxRows={}, stream={}", sqlTemplate, maxRowsValue, streamValue);
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Executing query on database '{}': {} with maxRows={}, stream={}",
+                dbKey, sqlTemplate, maxRowsValue, streamValue);
 
             // Validate SQL
             SqlValidator.ValidationResult validation = sqlValidator.validate(sqlTemplate);
@@ -192,7 +218,7 @@ public class QueryTools {
 
             if (streamValue) {
                 // Stream results
-                actualRowCount = executeStreamingQuery(finalSql, params, rows, maxRowsValue);
+                actualRowCount = executeStreamingQuery(jdbcTemplate, finalSql, params, rows, maxRowsValue);
             } else {
                 // Execute normally
                 rows = jdbcTemplate.queryForList(finalSql,
@@ -229,6 +255,10 @@ public class QueryTools {
     )
     public String explain(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "SQL SELECT template to explain",
             required = true
         ) String sqlTemplate,
@@ -243,9 +273,16 @@ public class QueryTools {
     ) {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
+            // Get JdbcTemplate for the specified database
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
             boolean analyzeValue = analyze != null ? analyze : false;
 
-            log.debug("Explaining query: {} with analyze={}", sqlTemplate, analyzeValue);
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Explaining query on database '{}': {} with analyze={}", dbKey, sqlTemplate, analyzeValue);
 
             // Validate SQL
             SqlValidator.ValidationResult validation = sqlValidator.validate(sqlTemplate);
@@ -427,6 +464,10 @@ public class QueryTools {
     )
     public String getSampleData(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "Schema name",
             required = true
         ) String schemaName,
@@ -447,9 +488,17 @@ public class QueryTools {
         try {
             queryCounter.increment();
 
+            // Get JdbcTemplate for the specified database
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
             int sampleSizeValue = sampleSize != null ? Math.min(sampleSize, 100) : 10;
 
-            log.debug("Getting sample data from {}.{} with {} rows", schemaName, tableName, sampleSizeValue);
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Getting sample data from database '{}', table {}.{} with {} rows",
+                dbKey, schemaName, tableName, sampleSizeValue);
 
             // Validate SQL
             String fullTableName = schemaName + "." + tableName;
@@ -562,12 +611,12 @@ public class QueryTools {
         return sql;
     }
 
-    private int executeStreamingQuery(String sql, Map<String, Object> params, 
+    private int executeStreamingQuery(JdbcTemplate jdbcTemplate, String sql, Map<String, Object> params,
                                    List<Map<String, Object>> rows, int maxRows) {
         // Simplified streaming implementation
-        List<Map<String, Object>> allRows = jdbcTemplate.queryForList(sql, 
+        List<Map<String, Object>> allRows = jdbcTemplate.queryForList(sql,
                 params != null ? params.values().toArray() : new Object[0]);
-        
+
         rows.addAll(allRows.subList(0, Math.min(allRows.size(), maxRows)));
         return rows.size();
     }

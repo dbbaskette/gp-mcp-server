@@ -1,5 +1,6 @@
 package com.baskettecase.gpmcp.tools;
 
+import com.baskettecase.gpmcp.db.DatabaseConnectionManager;
 import com.baskettecase.gpmcp.policy.PolicyService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -29,6 +30,9 @@ class SchemaToolsTest {
     private JdbcTemplate jdbcTemplate;
 
     @Mock
+    private DatabaseConnectionManager connectionManager;
+
+    @Mock
     private PolicyService policyService;
 
     private MeterRegistry meterRegistry;
@@ -37,7 +41,11 @@ class SchemaToolsTest {
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
-        schemaTools = new SchemaTools(jdbcTemplate, policyService, meterRegistry);
+
+        // Mock the connection manager to return the mocked JdbcTemplate
+        when(connectionManager.getJdbcTemplate(any(), any())).thenReturn(jdbcTemplate);
+
+        schemaTools = new SchemaTools(connectionManager, policyService, meterRegistry);
         schemaTools.initializeMetrics(); // Initialize counters and timers
     }
 
@@ -57,8 +65,8 @@ class SchemaToolsTest {
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
             .thenReturn((List) mockRows);
 
-        // Execute test
-        String result = schemaTools.listSchemas(null, null);
+        // Execute test (databaseName, limit, offset)
+        String result = schemaTools.listSchemas(null, null, null);
 
         // Verify results
         assertNotNull(result);
@@ -83,8 +91,8 @@ class SchemaToolsTest {
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
             .thenReturn((List) mockRows);
 
-        // Execute test with custom parameters
-        String result = schemaTools.listSchemas(10, 5);
+        // Execute test with custom parameters (databaseName, limit, offset)
+        String result = schemaTools.listSchemas(null, 10, 5);
 
         // Verify results
         assertNotNull(result);
@@ -107,8 +115,8 @@ class SchemaToolsTest {
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
             .thenReturn((List) mockRows);
 
-        // Execute test with limit exceeding maximum
-        String result = schemaTools.listSchemas(200, null);
+        // Execute test with limit exceeding maximum (databaseName, limit, offset)
+        String result = schemaTools.listSchemas(null, 200, null);
 
         // Verify result contains schema
         assertNotNull(result);
@@ -130,8 +138,8 @@ class SchemaToolsTest {
         when(jdbcTemplate.queryForList(anyString(), any(), any(), any()))
             .thenReturn((List) mockRows);
 
-        // Execute test with negative offset
-        String result = schemaTools.listSchemas(null, -5);
+        // Execute test with negative offset (databaseName, limit, offset)
+        String result = schemaTools.listSchemas(null, null, -5);
 
         // Verify result contains schema
         assertNotNull(result);

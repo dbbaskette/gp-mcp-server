@@ -44,7 +44,15 @@ gp:
     search-path: ${DB_SEARCH_PATH:public}
     statement-timeout-ms: ${DB_STATEMENT_TIMEOUT_MS:5000}
     idle-tx-timeout-ms: ${DB_IDLE_TX_TIMEOUT_MS:2000}
-    
+
+    # Security configuration
+    security:
+      # Enable/disable API key authentication
+      api-key-enabled: ${API_KEY_ENABLED:true}
+      # Encryption key for storing database credentials (required!)
+      # Generate with: openssl rand -base64 32
+      encryption-key: ${GP_MCP_ENCRYPTION_KEY:}
+
     # Policy configuration
     policy:
       path: ${POLICY_PATH:classpath:policy.yml}

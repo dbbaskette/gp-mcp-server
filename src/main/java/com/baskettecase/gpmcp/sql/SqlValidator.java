@@ -8,7 +8,6 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.PlainSelect;
-import net.sf.jsqlparser.statement.select.SelectBody;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.Join;
@@ -62,10 +61,10 @@ public class SqlValidator {
             }
 
             Select select = (Select) statement;
-            SelectBody selectBody = select.getSelectBody();
 
-            if (selectBody instanceof PlainSelect) {
-                PlainSelect plainSelect = (PlainSelect) selectBody;
+            // In JSQLParser 4.7+, we access PlainSelect directly
+            if (select.getSelectBody() instanceof PlainSelect) {
+                PlainSelect plainSelect = (PlainSelect) select.getSelectBody();
                 
                 // Validate tables
                 validateTables(plainSelect, errors, warnings);

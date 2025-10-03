@@ -1,6 +1,9 @@
 package com.baskettecase.gpmcp.tools;
 
+import com.baskettecase.gpmcp.db.DatabaseConnectionManager;
 import com.baskettecase.gpmcp.policy.PolicyService;
+import com.baskettecase.gpmcp.security.ApiKey;
+import com.baskettecase.gpmcp.security.ApiKeyContext;
 import com.baskettecase.gpmcp.util.JsonResponseFormatter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -32,7 +35,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class SchemaTools {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final DatabaseConnectionManager connectionManager;
     private final PolicyService policyService;
     private final MeterRegistry meterRegistry;
 
@@ -53,10 +56,13 @@ public class SchemaTools {
      * List available schemas with optional pagination
      */
     @McpTool(
-        name = "gp.listSchemas",
         description = "List available database schemas with table counts. Returns JSON table format."
     )
     public String listSchemas(
+        @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
         @McpToolParam(
             description = "Maximum number of schemas to return (default: 50)",
             required = false
@@ -70,10 +76,17 @@ public class SchemaTools {
         try {
             schemaQueryCounter.increment();
 
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            // Get JdbcTemplate for the specified database using API key credentials
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
             int limitValue = limit != null ? Math.min(limit, 100) : 50;
             int offsetValue = offset != null ? Math.max(offset, 0) : 0;
 
-            log.debug("Listing schemas: limit={}, offset={}", limitValue, offsetValue);
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Listing schemas in database '{}': limit={}, offset={}", dbKey, limitValue, offsetValue);
 
             // Get allowed schemas from policy
             Set<String> allowedSchemas = policyService.getAllowedSchemas();
@@ -136,20 +149,20 @@ public class SchemaTools {
     /**
      * Get tables for a specific schema
      */
-    private List<TableInfo> getTablesForSchema(String schemaName, boolean includeColumns) {
+    private List<TableInfo> getTablesForSchema(JdbcTemplate jdbcTemplate, String schemaName, boolean includeColumns) {
         try {
             String sql = """
-                SELECT table_name, table_type, 
+                SELECT table_name, table_type,
                        COUNT(column_name) as column_count
                 FROM information_schema.tables t
-                LEFT JOIN information_schema.columns c ON t.table_name = c.table_name 
+                LEFT JOIN information_schema.columns c ON t.table_name = c.table_name
                     AND t.table_schema = c.table_schema
-                WHERE t.table_schema = ? 
+                WHERE t.table_schema = ?
                     AND (t.table_name LIKE 'public.%' OR t.table_name NOT LIKE '%.%')
                 GROUP BY table_name, table_type
                 ORDER BY table_name
                 """;
-            
+
             List<Map<String, Object>> tableRows = jdbcTemplate.queryForList(sql, schemaName);
             List<TableInfo> tables = new ArrayList<>();
             
@@ -167,9 +180,9 @@ public class SchemaTools {
                 tableInfo.setName(tableName);
                 tableInfo.setType(tableType);
                 tableInfo.setColumnCount(columnCount);
-                
+
                 if (includeColumns) {
-                    tableInfo.setColumns(getColumnsForTable(schemaName, tableName));
+                    tableInfo.setColumns(getColumnsForTable(jdbcTemplate, schemaName, tableName));
                 }
                 
                 tables.add(tableInfo);
@@ -186,7 +199,7 @@ public class SchemaTools {
     /**
      * Get columns for a specific table
      */
-    private List<ColumnInfo> getColumnsForTable(String schemaName, String tableName) {
+    private List<ColumnInfo> getColumnsForTable(JdbcTemplate jdbcTemplate, String schemaName, String tableName) {
         try {
             String sql = """
                 SELECT column_name, data_type, is_nullable, column_default,
@@ -195,7 +208,7 @@ public class SchemaTools {
                 WHERE table_schema = ? AND table_name = ?
                 ORDER BY ordinal_position
                 """;
-            
+
             List<Map<String, Object>> columnRows = jdbcTemplate.queryForList(sql, schemaName, tableName);
             List<ColumnInfo> columns = new ArrayList<>();
             
@@ -249,6 +262,10 @@ public class SchemaTools {
     )
     public String listTables(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "Schema name to list tables from",
             required = true
         ) String schemaName,
@@ -269,11 +286,19 @@ public class SchemaTools {
         try {
             schemaQueryCounter.increment();
 
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            // Get JdbcTemplate for the specified database using API key credentials
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
             int limitValue = limit != null ? Math.min(limit, 500) : 100;
             int offsetValue = offset != null ? Math.max(offset, 0) : 0;
             boolean includeRowCountsValue = includeRowCounts != null ? includeRowCounts : false;
 
-            log.debug("Listing tables in schema: {}, limit={}, offset={}", schemaName, limitValue, offsetValue);
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Listing tables in database '{}', schema '{}': limit={}, offset={}",
+                dbKey, schemaName, limitValue, offsetValue);
 
             // Validate schema access
             if (!policyService.isSchemaAllowed(schemaName)) {
@@ -356,6 +381,10 @@ public class SchemaTools {
     )
     public String getTableSchema(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "Schema name",
             required = true
         ) String schemaName,
@@ -368,7 +397,14 @@ public class SchemaTools {
         try {
             schemaQueryCounter.increment();
 
-            log.debug("Getting table schema for {}.{}", schemaName, tableName);
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            // Get JdbcTemplate for the specified database using API key credentials
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Getting table schema for database '{}', table {}.{}", dbKey, schemaName, tableName);
 
             // Validate access
             if (!policyService.isTableAllowed(schemaName, tableName)) {
@@ -461,6 +497,10 @@ public class SchemaTools {
     )
     public String getTableDistribution(
         @McpToolParam(
+            description = "Database name (optional, uses default if not specified)",
+            required = false
+        ) String databaseName,
+        @McpToolParam(
             description = "Schema name",
             required = true
         ) String schemaName,
@@ -473,7 +513,14 @@ public class SchemaTools {
         try {
             schemaQueryCounter.increment();
 
-            log.debug("Getting distribution info for {}.{}", schemaName, tableName);
+            // Get API key from request context
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+
+            // Get JdbcTemplate for the specified database using API key credentials
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
+            String dbKey = (databaseName == null || databaseName.trim().isEmpty()) ? "default" : databaseName;
+            log.debug("Getting distribution info for database '{}', table {}.{}", dbKey, schemaName, tableName);
 
             // Validate access
             if (!policyService.isTableAllowed(schemaName, tableName)) {

@@ -1,0 +1,44 @@
+# Compiled class files
+*.class
+target/
+
+# Log files
+logs/
+*.log
+
+# Maven wrapper
+.m2/
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# MCP Inspector config (may contain API keys)
+.mcp.json
+mcp-inspector-config.json
+
+# Database files
+*.db
+gp_assistant.db
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
