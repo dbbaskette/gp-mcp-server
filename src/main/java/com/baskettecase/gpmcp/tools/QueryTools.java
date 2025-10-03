@@ -5,6 +5,7 @@ import com.baskettecase.gpmcp.policy.PolicyService;
 import com.baskettecase.gpmcp.security.ApiKey;
 import com.baskettecase.gpmcp.security.ApiKeyContext;
 import com.baskettecase.gpmcp.sql.SqlValidator;
+import com.baskettecase.gpmcp.util.FuzzyMatcher;
 import com.baskettecase.gpmcp.util.JsonResponseFormatter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -14,13 +15,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springaicommunity.mcp.annotation.McpTool;
 import org.springaicommunity.mcp.annotation.McpToolParam;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Query Execution Tools for MCP Server
@@ -252,6 +257,14 @@ public class QueryTools {
 
             return JsonResponseFormatter.formatWithRowCount(actualRowCount, redactedRows);
 
+        } catch (DataAccessException e) {
+            log.error("❌ Query execution failed", e);
+
+            // Try to provide helpful error messages with fuzzy matching suggestions
+            String errorMessage = e.getMessage();
+            String enhancedError = enhanceErrorMessage(errorMessage, databaseName);
+
+            throw new RuntimeException(enhancedError, e);
         } catch (Exception e) {
             log.error("❌ Query execution failed", e);
             throw new RuntimeException("Query execution failed: " + e.getMessage(), e);
@@ -643,6 +656,148 @@ public class QueryTools {
     private Long getEstimatedRows(List<Map<String, Object>> planRows) {
         // Extract estimated rows from query plan
         return planRows.isEmpty() ? 0L : 100L; // Placeholder
+    }
+
+    /**
+     * Enhance error messages with fuzzy matching suggestions for common SQL errors
+     *
+     * Detects patterns like:
+     * - "relation 'tablename' does not exist" → suggest similar table names
+     * - "column 'colname' does not exist" → suggest similar column names
+     * - "schema 'schemaname' does not exist" → suggest similar schema names
+     */
+    private String enhanceErrorMessage(String errorMessage, String databaseName) {
+        if (errorMessage == null) {
+            return "Unknown database error occurred";
+        }
+
+        // Pattern: relation "tablename" does not exist
+        Pattern tablePattern = Pattern.compile("relation \"([^\"]+)\" does not exist", Pattern.CASE_INSENSITIVE);
+        Matcher tableMatcher = tablePattern.matcher(errorMessage);
+        if (tableMatcher.find()) {
+            String misspelledTable = tableMatcher.group(1);
+            return enhanceTableNotFoundError(misspelledTable, errorMessage, databaseName);
+        }
+
+        // Pattern: column "colname" does not exist
+        Pattern columnPattern = Pattern.compile("column \"([^\"]+)\" does not exist", Pattern.CASE_INSENSITIVE);
+        Matcher columnMatcher = columnPattern.matcher(errorMessage);
+        if (columnMatcher.find()) {
+            String misspelledColumn = columnMatcher.group(1);
+            return enhanceColumnNotFoundError(misspelledColumn, errorMessage, databaseName);
+        }
+
+        // Pattern: schema "schemaname" does not exist
+        Pattern schemaPattern = Pattern.compile("schema \"([^\"]+)\" does not exist", Pattern.CASE_INSENSITIVE);
+        Matcher schemaMatcher = schemaPattern.matcher(errorMessage);
+        if (schemaMatcher.find()) {
+            String misspelledSchema = schemaMatcher.group(1);
+            return enhanceSchemaNotFoundError(misspelledSchema, errorMessage, databaseName);
+        }
+
+        // No pattern matched - return original error
+        return errorMessage;
+    }
+
+    /**
+     * Enhance "table not found" errors with fuzzy match suggestions
+     */
+    private String enhanceTableNotFoundError(String misspelledTable, String originalError, String databaseName) {
+        try {
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
+            // Extract schema if qualified name (schema.table)
+            final String schemaName;
+            final String tableName;
+            if (misspelledTable.contains(".")) {
+                String[] parts = misspelledTable.split("\\.", 2);
+                schemaName = parts[0];
+                tableName = parts[1];
+            } else {
+                schemaName = "public";
+                tableName = misspelledTable;
+            }
+
+            // Get all tables in the schema
+            String sql = """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = ?
+                AND table_type = 'BASE TABLE'
+                """;
+
+            List<String> allTables = jdbcTemplate.queryForList(sql, String.class, schemaName);
+
+            // Find fuzzy matches
+            List<String> suggestions = FuzzyMatcher.findClosestMatches(tableName, allTables);
+
+            if (!suggestions.isEmpty()) {
+                String suggestionText = suggestions.size() == 1
+                    ? String.format("Did you mean '%s.%s'?", schemaName, suggestions.get(0))
+                    : String.format("Did you mean one of these? %s",
+                        suggestions.stream()
+                            .map(s -> String.format("'%s.%s'", schemaName, s))
+                            .collect(java.util.stream.Collectors.joining(", ")));
+
+                log.info("💡 Fuzzy match suggestion for table '{}': {}", misspelledTable, suggestions);
+
+                return String.format("%s\n\n💡 %s", originalError, suggestionText);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to generate fuzzy match suggestions for table: {}", e.getMessage());
+        }
+
+        return originalError;
+    }
+
+    /**
+     * Enhance "column not found" errors with fuzzy match suggestions
+     */
+    private String enhanceColumnNotFoundError(String misspelledColumn, String originalError, String databaseName) {
+        // For column suggestions, we'd need to know which table is being queried
+        // This is more complex and would require parsing the SQL
+        // For now, just return the original error
+        return originalError;
+    }
+
+    /**
+     * Enhance "schema not found" errors with fuzzy match suggestions
+     */
+    private String enhanceSchemaNotFoundError(String misspelledSchema, String originalError, String databaseName) {
+        try {
+            ApiKey apiKey = ApiKeyContext.getCurrentApiKey();
+            JdbcTemplate jdbcTemplate = connectionManager.getJdbcTemplate(apiKey, databaseName);
+
+            // Get all schemas
+            String sql = """
+                SELECT schema_name
+                FROM information_schema.schemata
+                WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                """;
+
+            List<String> allSchemas = jdbcTemplate.queryForList(sql, String.class);
+
+            // Find fuzzy matches
+            List<String> suggestions = FuzzyMatcher.findClosestMatches(misspelledSchema, allSchemas);
+
+            if (!suggestions.isEmpty()) {
+                String suggestionText = suggestions.size() == 1
+                    ? String.format("Did you mean schema '%s'?", suggestions.get(0))
+                    : String.format("Did you mean one of these schemas? %s",
+                        suggestions.stream()
+                            .map(s -> String.format("'%s'", s))
+                            .collect(java.util.stream.Collectors.joining(", ")));
+
+                log.info("💡 Fuzzy match suggestion for schema '{}': {}", misspelledSchema, suggestions);
+
+                return String.format("%s\n\n💡 %s", originalError, suggestionText);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to generate fuzzy match suggestions for schema: {}", e.getMessage());
+        }
+
+        return originalError;
     }
 
     // Data classes
