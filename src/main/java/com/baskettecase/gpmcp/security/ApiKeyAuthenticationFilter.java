@@ -130,6 +130,6 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                path.startsWith("/actuator/info") ||
                path.startsWith("/actuator/prometheus") ||
                path.startsWith("/actuator/metrics") ||
-               path.startsWith("/admin/api-keys");  // Allow unauthenticated access to generate first key
+               path.startsWith("/admin/");  // Allow unauthenticated access to admin endpoints (key generation)
     }
 }
