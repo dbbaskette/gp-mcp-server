@@ -174,7 +174,7 @@ curl -X POST http://localhost:8082/admin/api-keys/generate \
   -H "Content-Type: application/json" \
   -d '{
     "username": "gpadmin",
-    "password": "VMware1!",
+    "password": "your_gp_password",
     "environment": "live",
     "description": "Production API key for gp-assistant"
   }'
